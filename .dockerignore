@@ -1,0 +1,27 @@
+# 构建上下文是本仓库根（Dockerfile 就在根下）。
+# 这里只保留源码与清单：依赖、构建产物、临时目录与本地环境文件都不进上下文。
+node_modules
+**/node_modules
+dist
+**/dist
+**/.output
+**/.nitro
+**/.tanstack
+.tmp
+.git
+.data
+**/.volumes
+__unconfig*
+coverage
+**/.vite
+**/.vitest
+.env
+.env.local
+.env.prod
+**/.env
+**/.env.local
+**/.env.prod
+.DS_Store
+*.log
+**/*.md
+!README.md

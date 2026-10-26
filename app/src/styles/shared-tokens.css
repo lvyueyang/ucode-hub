@@ -1,0 +1,80 @@
+/**
+ * 共享设计令牌（中性基础）：管理端与前台 global.css 共同引入
+ * 命名前缀 —t 表示不随主题变化的基础令牌。
+ * 品牌色阶（--t-brand-*）由各端按品牌自行定义，不在此文件。
+ * 新增令牌时若两端都需要，优先放到本文件，避免重复维护。
+ */
+:root {
+  /* 中性色阶 */
+  --t-neutral-0: #ffffff;
+  --t-neutral-50: #fafafa;
+  --t-neutral-100: #f5f5f5;
+  --t-neutral-200: #eeeeee;
+  --t-neutral-300: #e0e0e0;
+  --t-neutral-400: #bdbdbd;
+  --t-neutral-500: #9e9e9e;
+  --t-neutral-600: #757575;
+  --t-neutral-700: #616161;
+  --t-neutral-800: #424242;
+  --t-neutral-900: #212121;
+  --t-neutral-1000: #000000;
+
+  /* 功能色（亮/暗主题各自在语义层覆盖） */
+  --t-success: #00b96b;
+  --t-warning: #faad14;
+  --t-danger: #e34d59;
+  --t-info: #1677ff;
+
+  /* 字体大小 */
+  --t-font-xs: 0.75rem;
+  --t-font-sm: 0.8125rem;
+  --t-font-base: 0.875rem;
+  --t-font-md: 1rem;
+  --t-font-lg: 1.125rem;
+  --t-font-xl: 1.25rem;
+  --t-font-2xl: 1.5rem;
+  --t-font-3xl: 1.875rem;
+  --t-font-4xl: 2.25rem;
+  --t-font-5xl: 3rem;
+  --t-font-6xl: 3.75rem;
+
+  /* 字重 */
+  --t-fw-normal: 400;
+  --t-fw-medium: 500;
+  --t-fw-semibold: 600;
+  --t-fw-bold: 700;
+
+  /* 行高 */
+  --t-leading-tight: 1.25;
+  --t-leading-normal: 1.5;
+  --t-leading-relaxed: 1.75;
+
+  /* 圆角：项目为直角风格，全部归零（rounded-full 圆形元素由 Tailwind 默认值提供） */
+  --t-radius-xs: 0;
+  --t-radius-sm: 0;
+  --t-radius-md: 0;
+  --t-radius-lg: 0;
+  --t-radius-xl: 0;
+  --t-radius-2xl: 0;
+
+  /* 间距 */
+  --t-space-1: 0.25rem;
+  --t-space-2: 0.5rem;
+  --t-space-3: 0.75rem;
+  --t-space-4: 1rem;
+  --t-space-5: 1.25rem;
+  --t-space-6: 1.5rem;
+  --t-space-8: 2rem;
+  --t-space-10: 2.5rem;
+  --t-space-12: 3rem;
+  --t-space-16: 4rem;
+  --t-space-20: 5rem;
+  --t-space-24: 6rem;
+
+  /* 动效 */
+  --t-duration-fast: 150ms;
+  --t-duration-normal: 250ms;
+  --t-duration-slow: 350ms;
+  --t-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --t-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+}

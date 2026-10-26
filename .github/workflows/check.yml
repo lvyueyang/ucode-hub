@@ -1,0 +1,22 @@
+name: check
+
+# 本仓库只跑自己的检查：hub 的依赖、源码与配置都在这里，与 UCode 仓库无关。
+# 目标平台是 Linux 容器（部署形态），因此只跑 ubuntu。
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 版本取自 package.json 的 packageManager
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # biome + 各包 tsc --noEmit + 各包 vitest
+      - run: pnpm check

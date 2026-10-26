@@ -1,0 +1,35 @@
+{
+  "name": "@ucode/hub-lib",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./ms": "./src/ms/index.ts",
+    "./date-format": "./src/date-format/index.ts",
+    "./format-bytes": "./src/format-bytes/index.ts",
+    "./export": "./src/export/index.ts",
+    "./cache": "./src/cache/index.ts",
+    "./match-permission": "./src/match-permission/index.ts",
+    "./cn": "./src/cn/index.ts",
+    "./clipboard": "./src/clipboard/index.ts",
+    "./storage": "./src/storage/index.ts",
+    "./batch-writer": "./src/batch-writer/index.ts",
+    "./semaphore": "./src/semaphore/index.ts",
+    "./task-manager": "./src/task-manager/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "dayjs": "catalog:",
+    "tailwind-merge": "^3.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "jsdom": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

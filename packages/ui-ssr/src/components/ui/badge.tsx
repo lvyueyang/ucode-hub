@@ -1,0 +1,33 @@
+/**
+ * shadcn/ui Badge 组件
+ */
+
+import { cn } from "@ucode/hub-lib/cn";
+import { cva, type VariantProps } from "class-variance-authority";
+import type { HTMLAttributes, Ref } from "react";
+
+const badgeVariants = cva(
+  "inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+  {
+    variants: {
+      variant: {
+        default: "border-transparent bg-primary text-primary-foreground shadow",
+        secondary: "border-transparent bg-secondary text-secondary-foreground",
+        destructive: "border-transparent bg-destructive text-destructive-foreground shadow",
+        outline: "text-foreground",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  },
+);
+
+interface BadgeProps extends HTMLAttributes<HTMLDivElement>, VariantProps<typeof badgeVariants> {}
+
+function Badge({ className, variant, ref, ...props }: BadgeProps & { ref?: Ref<HTMLDivElement> }) {
+  return <div ref={ref} className={cn(badgeVariants({ variant }), className)} {...props} />;
+}
+
+export type { BadgeProps };
+export { Badge, badgeVariants };

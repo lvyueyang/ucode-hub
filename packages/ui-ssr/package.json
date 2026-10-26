@@ -1,0 +1,36 @@
+{
+  "name": "@ucode/hub-ui-ssr",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./ui": "./src/components/ui/index.ts",
+    "./theme": "./src/components/theme/index.ts",
+    "./form": "./src/components/form/index.ts"
+  },
+  "scripts": {
+    "test": "NODE_ENV=test vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@radix-ui/react-slot": "^1.5.0",
+    "@ucode/hub-lib": "workspace:*",
+    "class-variance-authority": "catalog:",
+    "embla-carousel-autoplay": "^8.6.0",
+    "embla-carousel-react": "^8.6.0"
+  },
+  "peerDependencies": {
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@testing-library/react": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "jsdom": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

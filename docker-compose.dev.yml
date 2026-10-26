@@ -1,0 +1,28 @@
+# hub 本地开发用的 PostgreSQL（生产用的是 `deploy/docker-compose.yml` 里的 db 服务）
+#
+#   pnpm -F @ucode/hub db:up     # 起库（等健康检查通过才返回）
+#   pnpm -F @ucode/hub db:down   # 停库（数据留在命名卷里；加 -v 才会连数据一起删）
+#
+# 端口与库名只服务开发：绑回环、错开 5432，避免打到本机其它 PostgreSQL 上。
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: hub-dev-db
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:15432:5432"
+    environment:
+      POSTGRES_USER: hub
+      POSTGRES_PASSWORD: hub
+      POSTGRES_DB: hub
+    volumes:
+      # 命名卷：重启与 db:down 都不丢数据，改迁移只需重跑 `pnpm db:migrate`
+      - hub-dev-db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hub -d hub"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  hub-dev-db:

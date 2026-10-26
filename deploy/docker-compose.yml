@@ -1,0 +1,92 @@
+# 生产环境 docker compose 部署
+# 部署目录：/opt/hub/（由 DEPLOY_DIR 覆盖，见各脚本）
+# 部署命令：TAG=latest ./deploy.sh
+#
+# 服务器目录结构（/opt/hub/）：
+#   ├── docker-compose.yml
+#   ├── .env                      # 全部配置（含 DB 密码，见 .env.example）
+#   └── volumes/
+#       ├── app/                  # 应用数据（日志、上传文件，宿主属主 1001:1001）
+#       └── db/                   # PostgreSQL 数据持久化
+#
+# .env 必填项（模板默认值见 .env.example）：
+#   POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD
+#   JWT_SECRET（至少 32 位随机字符串）
+# 应用侧必需项 DATABASE_URL / JWT_SECRET / STORAGE_DIR 均由本文件注入；
+# 应用启动时校验它们（规则见 app/src/env.ts），缺失或取值非法即拒绝启动
+
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: hub-db
+    restart: unless-stopped
+    ports:
+      - "${DB_PORT:-14010}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./volumes/db:/var/lib/postgresql
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    mem_limit: 512m
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  app:
+    image: ghcr.io/ucode/hub:${TAG:-latest}
+    container_name: hub-app
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${APP_PORT:-3009}:3009"
+    environment:
+      # 容器内 Nitro 监听端口，与下面的端口映射、healthcheck 保持一致
+      PORT: "3009"
+      # 应用侧必需项：连接串由 POSTGRES_* 拼出，STORAGE_DIR 固定映射到 volumes/app
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      STORAGE_DIR: /app/data
+      JWT_SECRET: ${JWT_SECRET}
+      # 以下均为可选：未设置时用应用内默认值，设置则必须合法（否则启动失败）
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:-}
+      # 只接受 true / false；线上未启用 HTTPS 时必须设 false
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
+      # 隧道回灌的父域（可选）：设了才启用子域 ingress，需泛域名解析与泛域名证书
+      HUB_BASE_DOMAIN: ${HUB_BASE_DOMAIN:-}
+      DB_POOL_MAX: ${DB_POOL_MAX:-10}
+      DB_POOL_IDLE_TIMEOUT_MS: ${DB_POOL_IDLE_TIMEOUT_MS:-30000}
+      DB_POOL_CONNECTION_TIMEOUT_MS: ${DB_POOL_CONNECTION_TIMEOUT_MS:-2000}
+    volumes:
+      - ./volumes/app:/app/data
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    mem_limit: 2g
+    mem_reservation: 512m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3009/health').then(function(r){if(!r.ok)process.exit(1)}).catch(function(){process.exit(1)})\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

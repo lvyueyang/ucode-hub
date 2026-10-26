@@ -1,0 +1,256 @@
+/* 预声明层顺序：antd 样式由 StyleProvider layer 注入 @layer antd。
+ * 顺序约定：preflight(base) 打底 → antd 组件样式覆盖 reset → utilities 最后，
+ * 保证 Tailwind 工具类可覆盖 antd 全局规则（如锚点颜色），且 antd 组件不受 preflight 影响。
+ * 与 Document.tsx 内联层声明保持一致。 */
+@layer properties, theme, base, antd, components, utilities;
+
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./shared-tokens.css";
+@plugin "@tailwindcss/typography";
+
+/* 扫描 workspace ui 包源码中的 tailwind 类名 */
+@source "../../../packages/ui-ssr/src";
+@source "../../../packages/ui-spa/src";
+
+/* 暗色变体：data-theme 以 -dark 结尾即暗色主题（主题名由 themes.ts 注册表约定） */
+@custom-variant dark (&:is([data-theme$="-dark"] *));
+
+/* ========================================
+ * 品牌色阶（前台：中性灰，无独立品牌色）
+ * 主色在亮色取中性深、暗色取中性浅，形成「文字即主色」的中性风格。
+ * ======================================== */
+:root {
+  --t-brand-50: var(--t-neutral-50);
+  --t-brand-100: var(--t-neutral-100);
+  --t-brand-200: var(--t-neutral-200);
+  --t-brand-300: var(--t-neutral-300);
+  --t-brand-400: var(--t-neutral-400);
+  --t-brand-500: var(--t-neutral-500);
+  --t-brand-600: var(--t-neutral-600);
+  --t-brand-700: var(--t-neutral-700);
+  --t-brand-800: var(--t-neutral-800);
+  --t-brand-900: var(--t-neutral-900);
+}
+
+/* ========================================
+ * 语义变量（Semantic Tokens）— 亮色主题
+ * :root 兜底默认亮色，保证初始 HTML 无 data-theme（如错误页）时正常渲染
+ * ======================================== */
+:root,
+[data-theme="client-neutral-light"] {
+  --s-primary: var(--t-brand-900);
+  --s-primary-hover: var(--t-brand-800);
+  --s-primary-active: var(--t-neutral-1000);
+  --s-primary-bg: var(--t-brand-100);
+  --s-primary-fg: var(--t-neutral-0);
+
+  --s-surface: var(--t-neutral-0);
+  --s-surface-secondary: var(--t-neutral-50);
+  --s-surface-tertiary: var(--t-neutral-100);
+
+  --s-text: var(--t-neutral-1000);
+  --s-text-secondary: var(--t-neutral-700);
+  --s-text-tertiary: var(--t-neutral-500);
+  --s-text-inverse: var(--t-neutral-0);
+  --s-text-link: var(--t-brand-800);
+
+  --s-card: var(--t-neutral-0);
+  --s-card-border: var(--t-neutral-200);
+
+  --s-border: var(--t-neutral-200);
+  --s-divider: var(--t-neutral-100);
+  --s-ring: var(--t-brand-900);
+
+  --s-success: var(--t-success);
+  --s-warning: var(--t-warning);
+  --s-danger: var(--t-danger);
+  --s-info: var(--t-info);
+
+  --s-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --s-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --s-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --s-shadow-xl: 0 12px 48px rgba(0, 0, 0, 0.12);
+}
+
+/* ========================================
+ * 语义变量 — 暗色主题
+ * ======================================== */
+[data-theme="client-neutral-dark"] {
+  --s-primary: var(--t-brand-100);
+  --s-primary-hover: var(--t-brand-200);
+  --s-primary-active: var(--t-neutral-0);
+  --s-primary-bg: rgba(255, 255, 255, 0.1);
+  --s-primary-fg: var(--t-neutral-1000);
+
+  --s-surface: #0a0a0a;
+  --s-surface-secondary: #141414;
+  --s-surface-tertiary: #1a1a1a;
+
+  --s-text: rgba(255, 255, 255, 0.92);
+  --s-text-secondary: rgba(255, 255, 255, 0.65);
+  --s-text-tertiary: rgba(255, 255, 255, 0.45);
+  --s-text-inverse: var(--t-neutral-1000);
+  --s-text-link: var(--t-brand-200);
+
+  --s-card: #141414;
+  --s-card-border: rgba(255, 255, 255, 0.06);
+
+  --s-border: rgba(255, 255, 255, 0.08);
+  --s-divider: rgba(255, 255, 255, 0.04);
+  --s-ring: var(--t-brand-200);
+
+  --s-success: #00d97a;
+  --s-warning: #ffc53d;
+  --s-danger: #ff7875;
+  --s-info: #4096ff;
+
+  --s-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --s-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --s-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --s-shadow-xl: 0 12px 48px rgba(0, 0, 0, 0.5);
+}
+
+/* ========================================
+ * Tailwind 主题映射
+ * 将语义变量注册到 Tailwind 工具类系统（字体族走系统默认，见 --font-sans）
+ * ======================================== */
+@theme inline {
+  --font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+
+  --color-background: var(--s-surface);
+  --color-background-secondary: var(--s-surface-secondary);
+  --color-background-tertiary: var(--s-surface-tertiary);
+
+  --color-foreground: var(--s-text);
+  --color-foreground-secondary: var(--s-text-secondary);
+  --color-foreground-tertiary: var(--s-text-tertiary);
+  --color-foreground-inverse: var(--s-text-inverse);
+
+  --color-card: var(--s-card);
+  --color-card-border: var(--s-card-border);
+
+  --color-popover: var(--s-card);
+  --color-popover-foreground: var(--s-text);
+
+  --color-primary: var(--s-primary);
+  --color-primary-hover: var(--s-primary-hover);
+  --color-primary-active: var(--s-primary-active);
+  --color-primary-bg: var(--s-primary-bg);
+  --color-primary-fg: var(--s-primary-fg);
+  --color-primary-foreground: var(--s-primary-fg);
+
+  --color-secondary: var(--s-surface-secondary);
+  --color-secondary-foreground: var(--s-text);
+
+  --color-muted: var(--s-surface-secondary);
+  --color-muted-foreground: var(--s-text-secondary);
+
+  --color-accent: var(--s-surface-secondary);
+  --color-accent-foreground: var(--s-text);
+
+  --color-border: var(--s-border);
+  --color-input: var(--s-border);
+  --color-divider: var(--s-divider);
+  --color-ring: var(--s-ring);
+
+  --color-success: var(--s-success);
+  --color-warning: var(--s-warning);
+  --color-danger: var(--s-danger);
+  --color-info: var(--s-info);
+  --color-destructive: var(--s-danger);
+  --color-destructive-foreground: var(--s-text);
+
+  --color-sidebar: var(--s-surface-secondary);
+  --color-sidebar-foreground: var(--s-text);
+  --color-sidebar-primary: var(--s-primary);
+  --color-sidebar-primary-foreground: var(--s-primary-fg);
+  --color-sidebar-accent: var(--s-surface-tertiary);
+  --color-sidebar-accent-foreground: var(--s-text);
+  --color-sidebar-border: var(--s-border);
+  --color-sidebar-ring: var(--s-ring);
+
+  /* 圆角：全 0（裸 rounded 与 rounded-sm/md/lg/xl 及 xs/2xl 均归零），rounded-full 保留圆形 */
+  --radius: 0;
+  --radius-xs: 0;
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --radius-2xl: 0;
+
+  --shadow-sm: var(--s-shadow-sm);
+  --shadow-md: var(--s-shadow-md);
+  --shadow-lg: var(--s-shadow-lg);
+  --shadow-xl: var(--s-shadow-xl);
+}
+
+/* ========================================
+ * 全局基础样式
+ * ======================================== */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  #app {
+    min-height: 100%;
+  }
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    background-color: var(--s-surface);
+    color: var(--s-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  /* 锚点样式置于 base 层，保证 Tailwind utilities 可覆盖 */
+  a {
+    color: inherit;
+    text-underline-offset: 2px;
+  }
+  a:hover {
+    color: inherit;
+    opacity: 0.8;
+  }
+  code {
+    font-size: 0.9em;
+    border: 1px solid var(--s-border);
+    background: var(--s-surface-secondary);
+    border-radius: 0;
+    padding: 2px 7px;
+  }
+  pre code {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+    color: inherit;
+  }
+}
+
+/* antd 的 `:where(hash) a` reset 位于 @layer antd（晚于 base），且 App 组件以 hash 容器包裹全页，
+ * 会把未显式着色的裸 a 持续覆盖为 antd 链接蓝。此处于 components 层（晚于 antd、早于 utilities）
+ * 重建语义色：继承文本色 + 允许 utilities 继续覆盖，避免浮动层（message/modal 等）触发时样式波动 */
+@layer components {
+  a {
+    color: inherit;
+    text-underline-offset: 2px;
+  }
+  a:hover {
+    color: inherit;
+    opacity: 0.8;
+  }
+}
+
+/* 紧凑型拖拽上传区域：antd 组件样式统一注入 @layer antd，此处规则未分层（天然优先于任何 @layer），
+ * 故无需 !important 强压 */
+.compact-dragger .ant-upload-drag {
+  height: auto;
+  padding: 20px 16px;
+}
+.compact-dragger .ant-upload-drag .ant-upload-text {
+  margin: 0;
+  font-size: 14px;
+}

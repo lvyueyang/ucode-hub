@@ -1,0 +1,95 @@
+# hub 的反代样例（宿主机 nginx）
+#
+# 为什么需要它：hub 自己只监听 127.0.0.1（见 deploy/docker-compose.yml），公网入口由宿主机反代终止 TLS。
+# 三条硬要求，少一条就会出问题：
+#   1. `proxy_buffering off`：事件流是长连接，缓冲会让首帧等到缓冲区满才出去；
+#   2. 长读超时：隧道与事件流都长时间没有数据帧，"读超时"过短会把连接切断；
+#   3. WS 升级透传：hub 的隧道端点是 WebSocket（`/api/v1/tunnel`），缺了 Upgrade 头就升级不了。
+#
+# 域名规划：
+#   - 主域（如 hub.example.com）：控制面（后台、设备接口、隧道端点）；
+#   - 泛子域（*.<HUB_BASE_DOMAIN>）：隧道回灌的 ingress，按 `<设备 id>.<父域>` 认设备，
+#     因此需要泛域名解析与**泛域名证书**。
+# 泛域名证书可用 DNS-01 挑战签发（见文末 certbot 例子）。
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# ── 主域：控制面 + 隧道端点 ──────────────────────────────────────────────
+server {
+    listen 80;
+    listen [::]:80;
+    server_name hub.example.com;
+    # 证书签发用；其余请求一律跳 HTTPS
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name hub.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/hub.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/hub.example.com/privkey.pem;
+
+    # 后台与设备接口都是 JSON，体积小；但隧道与事件流是长连接，不能设小超时
+    client_max_body_size 32m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3009;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
+
+        proxy_buffering off;          # 事件流必须边收边发
+        proxy_read_timeout 1h;        # 隧道与事件流的空闲间隔可以很长
+        proxy_send_timeout 1h;
+    }
+}
+
+# ── 泛子域：隧道回灌（ingress）───────────────────────────────────────────
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name *.hub.example.com;    # 解析需泛域名记录（* → 本机）
+
+    ssl_certificate     /etc/letsencrypt/live/hub.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/hub.example.com/privkey.pem;
+
+    # 附件上传走隧道回灌到 UCode，体积上限按产品口径给（UCode 自身另有 32MB 附件上限）
+    client_max_body_size 256m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3009;
+        proxy_http_version 1.1;
+        # Host 必须原样透传：hub 靠子域认设备，改写 Host 会让 ingress 找不到设备
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_buffering off;
+        proxy_request_buffering off;  # 上传也要流式：别先把整个请求体落到 nginx 临时文件
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+}
+
+# ── 泛域名证书（DNS-01，示例）────────────────────────────────────────────
+#
+#   certbot certonly --manual --preferred-challenges dns \
+#     -d hub.example.com -d '*.hub.example.com'
+#
+# 签发后把两段 server 的 ssl_certificate* 指到同一份证书即可（泛域名证书覆盖主域与所有子域）。
+#
+# 本机联调（不经 TLS）时可以直接把 deployment 指向 http://127.0.0.1:3009，
+# 用 `curl -H 'host: <设备 id>.<HUB_BASE_DOMAIN>'` 打 ingress；生产必须走上面的 HTTPS 配置。

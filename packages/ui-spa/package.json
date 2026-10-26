@@ -1,0 +1,41 @@
+{
+  "name": "@ucode/hub-ui-spa",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./antd-static": "./src/antd-static/index.tsx",
+    "./clipboard": "./src/clipboard.ts",
+    "./table": "./src/table/index.ts",
+    "./upload": "./src/upload/index.ts",
+    "./editor": "./src/editor/index.ts",
+    "./permission-tags": "./src/permission-tags.tsx",
+    "./json-import-button": "./src/json-import-button.tsx",
+    "./ms-input": "./src/ms-input.tsx"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "@ucode/hub-lib": "workspace:*"
+  },
+  "peerDependencies": {
+    "@ant-design/icons": "catalog:",
+    "@easyx/editor": "catalog:",
+    "@tanstack/react-router": "catalog:",
+    "antd": "catalog:",
+    "dayjs": "catalog:",
+    "monaco-editor": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@easyx/editor": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
