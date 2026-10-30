@@ -1,7 +1,7 @@
 /**
  * 客户端角色管理：CRUD 操作
  */
-import { and, eq, ilike, isNull, or } from "drizzle-orm";
+import { and, eq, isNull, like, or } from "drizzle-orm";
 import type { z } from "zod";
 import { db } from "#/db/index";
 import { clientRole } from "#/db/schema";
@@ -31,7 +31,7 @@ export type ClientRoleListParams = z.infer<typeof clientRoleListSchema>;
 /** 角色关键词搜索条件（名称 / 标识模糊匹配） */
 function keywordCondition(keyword?: string) {
   return keyword
-    ? or(ilike(clientRole.name, `%${keyword}%`), ilike(clientRole.slug, `%${keyword}%`))
+    ? or(like(clientRole.name, `%${keyword}%`), like(clientRole.slug, `%${keyword}%`))
     : undefined;
 }
 

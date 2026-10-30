@@ -2,7 +2,7 @@
  * 埋点事件查询模块：分页查询与已有事件名列表（供筛选下拉）
  */
 import { toDayRange } from "@ucode/hub-lib/date-format";
-import { and, eq, gte, ilike, lt, or, type SQLWrapper, sql } from "drizzle-orm";
+import { and, eq, gte, like, lt, or, type SQLWrapper } from "drizzle-orm";
 import { db } from "#/db/index";
 import { trackEvent as trackEventTable } from "#/db/schema";
 import {
@@ -39,10 +39,11 @@ export async function searchTrackEvents(query: TrackEventQuery): Promise<TrackEv
     conditions.push(eq(trackEventTable.sessionId, sessionId));
   }
   if (keyword) {
+    // properties 为 JSON 文本，直接对整列做子串匹配（json_extract 无法表达全字段模糊搜）
     conditions.push(
       or(
-        ilike(trackEventTable.name, `%${keyword}%`),
-        sql`${trackEventTable.properties}::text ILIKE ${`%${keyword}%`}`,
+        like(trackEventTable.name, `%${keyword}%`),
+        like(trackEventTable.properties, `%${keyword}%`),
       ),
     );
   }

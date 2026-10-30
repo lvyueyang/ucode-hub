@@ -108,9 +108,10 @@ export async function deleteDict(id: string) {
   }
 
   const now = new Date();
-  await withTransaction(async (tx) => {
-    await tx.update(dictItem).set({ deletedAt: now }).where(eq(dictItem.dictSlug, existing.slug));
-    await tx.update(dict).set({ deletedAt: now }).where(eq(dict.id, id));
+  // node:sqlite 的事务回调必须同步，事务内一律用终结符（.run()/.all()）立即执行
+  withTransaction((tx) => {
+    tx.update(dictItem).set({ deletedAt: now }).where(eq(dictItem.dictSlug, existing.slug)).run();
+    tx.update(dict).set({ deletedAt: now }).where(eq(dict.id, id)).run();
   });
   invalidateCache();
   await loadDictCache();
@@ -352,36 +353,40 @@ export async function importDicts(data: DictImportData): Promise<DictImportResul
     itemsSkipped: 0,
   };
 
-  await withTransaction(async (tx) => {
+  withTransaction((tx) => {
     const importedSlugs = new Set(data.dicts.map((d) => d.slug));
-    const existingDicts = await tx
+    const existingDicts = tx
       .select({ slug: dict.slug })
       .from(dict)
-      .where(isNull(dict.deletedAt));
+      .where(isNull(dict.deletedAt))
+      .all();
     for (const d of existingDicts) importedSlugs.add(d.slug);
 
     for (const d of data.dicts) {
-      const [existing] = await tx
+      const [existing] = tx
         .select()
         .from(dict)
         .where(and(eq(dict.slug, d.slug), isNull(dict.deletedAt)))
-        .limit(1);
+        .limit(1)
+        .all();
       if (existing) {
-        await tx
-          .update(dict)
+        tx.update(dict)
           .set({
             name: d.name,
             description: d.description ?? existing.description,
             updatedAt: new Date(),
           })
-          .where(eq(dict.id, existing.id));
+          .where(eq(dict.id, existing.id))
+          .run();
         result.dictsUpdated++;
       } else {
-        await tx.insert(dict).values({
-          name: d.name,
-          slug: d.slug,
-          description: d.description,
-        });
+        tx.insert(dict)
+          .values({
+            name: d.name,
+            slug: d.slug,
+            description: d.description,
+          })
+          .run();
         result.dictsCreated++;
       }
     }
@@ -391,7 +396,7 @@ export async function importDicts(data: DictImportData): Promise<DictImportResul
         result.itemsSkipped++;
         continue;
       }
-      const [existing] = await tx
+      const [existing] = tx
         .select()
         .from(dictItem)
         .where(
@@ -401,10 +406,10 @@ export async function importDicts(data: DictImportData): Promise<DictImportResul
             isNull(dictItem.deletedAt),
           ),
         )
-        .limit(1);
+        .limit(1)
+        .all();
       if (existing) {
-        await tx
-          .update(dictItem)
+        tx.update(dictItem)
           .set({
             label: item.label,
             sortOrder: item.sortOrder ?? existing.sortOrder,
@@ -414,19 +419,22 @@ export async function importDicts(data: DictImportData): Promise<DictImportResul
             color: item.color ?? existing.color,
             updatedAt: new Date(),
           })
-          .where(eq(dictItem.id, existing.id));
+          .where(eq(dictItem.id, existing.id))
+          .run();
         result.itemsUpdated++;
       } else {
-        await tx.insert(dictItem).values({
-          dictSlug: item.dictSlug,
-          label: item.label,
-          value: item.value,
-          sortOrder: item.sortOrder ?? 0,
-          status: item.status ?? "active",
-          extraType: item.extraType ?? null,
-          extra: item.extra ?? null,
-          color: item.color ?? null,
-        });
+        tx.insert(dictItem)
+          .values({
+            dictSlug: item.dictSlug,
+            label: item.label,
+            value: item.value,
+            sortOrder: item.sortOrder ?? 0,
+            status: item.status ?? "active",
+            extraType: item.extraType ?? null,
+            extra: item.extra ?? null,
+            color: item.color ?? null,
+          })
+          .run();
         result.itemsCreated++;
       }
     }

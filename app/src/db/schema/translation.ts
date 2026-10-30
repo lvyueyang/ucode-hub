@@ -6,36 +6,36 @@
  * - 默认语言（zh）内容存在主表原字段，其他语言翻译写入 content_translation
  * - value_type 复用 EditorType 枚举，控制管理端编辑器和渲染方式
  */
-import { index, pgTable, text, unique, uuid, varchar } from "drizzle-orm/pg-core";
+import { index, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
 import { pk, timestamps } from "./columns";
 
 /** UI 固定文案翻译表：key 直接使用中文原文（如 "首页"），en 语言用于映射目标语言值 */
-export const uiTranslation = pgTable(
+export const uiTranslation = sqliteTable(
   "ui_translation",
   {
     ...pk(),
-    locale: varchar({ length: 10 }).notNull(),
-    key: varchar({ length: 300 }).notNull(),
-    value: text().notNull(),
+    locale: text("locale").notNull(),
+    key: text("key").notNull(),
+    value: text("value").notNull(),
     /** 复用 EditorType: input | text | number | json | rich | code */
-    valueType: varchar("value_type", { length: 20 }).default("input").notNull(),
+    valueType: text("value_type").default("input").notNull(),
     ...timestamps(),
   },
   (table) => [unique("uq_ui_trans_locale_key").on(table.locale, table.key)],
 );
 
 /** 实体字段翻译表：entity_type + entity_id + field_name + locale 唯一确定一条翻译 */
-export const contentTranslation = pgTable(
+export const contentTranslation = sqliteTable(
   "content_translation",
   {
     ...pk(),
-    entityType: varchar("entity_type", { length: 50 }).notNull(),
-    entityId: uuid("entity_id").notNull(),
-    fieldName: varchar("field_name", { length: 100 }).notNull(),
-    locale: varchar({ length: 10 }).notNull(),
-    value: text().notNull(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    fieldName: text("field_name").notNull(),
+    locale: text("locale").notNull(),
+    value: text("value").notNull(),
     /** 复用 EditorType: input | text | rich 等 */
-    valueType: varchar("value_type", { length: 20 }).default("text").notNull(),
+    valueType: text("value_type").default("text").notNull(),
     ...timestamps(),
   },
   (table) => [

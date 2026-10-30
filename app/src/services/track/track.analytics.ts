@@ -7,7 +7,6 @@ import dayjs from "dayjs";
 import { eq, inArray, type SQL, sql } from "drizzle-orm";
 import { db } from "#/db/index";
 import { trackEvent as trackEventTable, trackPropertyMeta } from "#/db/schema";
-import { extractRows } from "#/shared-services/query/query-utils.server";
 import type {
   AnalyticsDelta,
   DimensionDistributionItem,
@@ -22,22 +21,47 @@ import { ANALYTICS_DIMENSION_KEYS } from "./track.types";
 /** 指标聚合表达式：metric=users 按用户/会话去重 */
 function metricAggExpr(metric: "count" | "users"): SQL {
   return metric === "users"
-    ? sql`COUNT(DISTINCT COALESCE(${trackEventTable.userId}::text, ${trackEventTable.sessionId}))`
+    ? sql`COUNT(DISTINCT COALESCE(${trackEventTable.userId}, ${trackEventTable.sessionId}))`
     : sql`COUNT(*)`;
 }
 
-/** 时间桶表达式：按粒度格式化（统一东八区） */
+/**
+ * properties 的 JSON 路径：key 一律当作单个成员名处理（加引号），
+ * 否则含 `.` 的 key 会被当成层级路径，与 pg 的 jsonb 取值运算符（整串当键）不等价
+ */
+const toJsonPath = (key: string): string =>
+  `$."${key.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+
+/**
+ * properties 的标签取值表达式：取单个成员名并 CAST 成 TEXT。
+ * SQLite 的 json_extract 保留 JSON 原生类型（数字仍是数字、布尔是 0/1），
+ * 标签用途必须 CAST 成 TEXT 才能与 pg 的口径（一律返回文本）一致；
+ * 代价是布尔值呈现为 1/0。
+ */
+const propertyLabelExpr = (key: string): SQL =>
+  sql`CAST(json_extract(${trackEventTable.properties}, ${toJsonPath(key)}) AS TEXT)`;
+
+/**
+ * 时间桶表达式：毫秒时间戳按秒换算后加 8 小时转东八区，再按粒度格式化。
+ * 周粒度取所在 ISO 周的周一（对齐 pg 的 DATE_TRUNC('week')）：
+ * `weekday 0` 前进到周日（当天是周日则不动）、再回退 6 天；
+ * 直接用 `weekday 1` 会让周一自身退到上一周，故不采用。
+ */
 function timeBucketExpr(granularity: "hour" | "day" | "week"): SQL {
-  const tzTime = sql`${trackEventTable.time} AT TIME ZONE 'Asia/Shanghai'`;
-  if (granularity === "hour") return sql`TO_CHAR(${tzTime}, 'YYYY-MM-DD HH24:00')`;
-  if (granularity === "week") return sql`TO_CHAR(DATE_TRUNC('week', ${tzTime}), 'YYYY-MM-DD')`;
-  return sql`TO_CHAR(${tzTime}, 'YYYY-MM-DD')`;
+  const seconds = sql`${trackEventTable.time} / 1000`;
+  if (granularity === "hour") {
+    return sql`strftime('%Y-%m-%d %H:00', ${seconds}, 'unixepoch', '+8 hours')`;
+  }
+  if (granularity === "week") {
+    return sql`date(${seconds}, 'unixepoch', '+8 hours', 'weekday 0', '-6 days')`;
+  }
+  return sql`strftime('%Y-%m-%d', ${seconds}, 'unixepoch', '+8 hours')`;
 }
 
 /** 趋势分组列：有拆解维度时按属性值分组，否则按事件名 */
 function seriesExpr(breakdown?: string): SQL {
   return breakdown
-    ? sql`COALESCE(${trackEventTable.properties}->>(${breakdown}::text), '未知')`
+    ? sql`COALESCE(${propertyLabelExpr(breakdown)}, '未知')`
     : sql`${trackEventTable.name}`;
 }
 
@@ -72,7 +96,7 @@ function addBucket(date: Date, granularity: "hour" | "day" | "week"): Date {
   return new Date(date.getTime() + step);
 }
 
-/** 东八区格式化为与 SQL TO_CHAR 同源的时间桶标签 */
+/** 东八区格式化为与 SQL 时间桶同源的时间桶标签 */
 function formatBucket(date: Date, granularity: "hour" | "day" | "week"): string {
   const local = new Date(date.getTime() + TZ_OFFSET_MS);
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -133,15 +157,16 @@ async function getAnalyticsKpis(
   end: Date,
   eventNames: string[] | undefined,
 ): Promise<{ totalEvents: number; uniqueUsers: number }> {
-  const rows = await db.execute<{ total: number; users: number }>(sql`
-		SELECT COUNT(*)::int AS total,
-		       COUNT(DISTINCT COALESCE(${trackEventTable.userId}::text, ${trackEventTable.sessionId}))::int AS users
+  const row = (
+    await db.all<{ total: number; users: number }>(sql`
+		SELECT COUNT(*) AS total,
+		       COUNT(DISTINCT COALESCE(${trackEventTable.userId}, ${trackEventTable.sessionId})) AS users
 		  FROM ${trackEventTable}
-		 WHERE ${trackEventTable.time} >= ${start.toISOString()}
-		   AND ${trackEventTable.time} < ${end.toISOString()}
+		 WHERE ${trackEventTable.time} >= ${start.getTime()}
+		   AND ${trackEventTable.time} < ${end.getTime()}
 		   ${eventNameFilter(eventNames)}
-	`);
-  const row = extractRows<{ total: number; users: number }>(rows)[0];
+	`)
+  )[0];
   return {
     totalEvents: row?.total ?? 0,
     uniqueUsers: row?.users ?? 0,
@@ -162,20 +187,19 @@ async function getAnalyticsTrend(
   const bucket = timeBucketExpr(granularity);
   const agg = metricAggExpr(metric);
   const series = seriesExpr(breakdown);
-  const rows = await db.execute(sql`
+  const list = await db.all<{
+    date: string;
+    series: string | null;
+    value: number;
+  }>(sql`
 		SELECT ${bucket} AS date, ${series} AS series, ${agg} AS value
 		  FROM ${trackEventTable}
-		 WHERE ${trackEventTable.time} >= ${start.toISOString()}
-		   AND ${trackEventTable.time} < ${end.toISOString()}
+		 WHERE ${trackEventTable.time} >= ${start.getTime()}
+		   AND ${trackEventTable.time} < ${end.getTime()}
 		   ${eventNameFilter(eventNames)}
 		 GROUP BY date, series
 		 ORDER BY date, series
 	`);
-  const list = extractRows<{
-    date: string;
-    series: string | null;
-    value: number;
-  }>(rows);
   // 单系列（无拆解维度且未多选事件）且开启周期对比时补齐空桶为 0，
   // 保证 current 与对比窗口桶数一致，前端按索引对齐不致错位
   const singleSeries = !breakdown && !(eventNames && eventNames.length > 1);
@@ -202,19 +226,18 @@ async function getEventRanking(
   end: Date,
   eventNames: string[] | undefined,
 ): Promise<Omit<EventRankingItem, "ratio">[]> {
-  const rows = await db.execute(sql`
+  const list = await db.all<{ name: string; count: number; users: number }>(sql`
 		SELECT ${trackEventTable.name} AS name,
-		       COUNT(*)::int AS count,
-		       COUNT(DISTINCT COALESCE(${trackEventTable.userId}::text, ${trackEventTable.sessionId}))::int AS users
+		       COUNT(*) AS count,
+		       COUNT(DISTINCT COALESCE(${trackEventTable.userId}, ${trackEventTable.sessionId})) AS users
 		  FROM ${trackEventTable}
-		 WHERE ${trackEventTable.time} >= ${start.toISOString()}
-		   AND ${trackEventTable.time} < ${end.toISOString()}
+		 WHERE ${trackEventTable.time} >= ${start.getTime()}
+		   AND ${trackEventTable.time} < ${end.getTime()}
 		   ${eventNameFilter(eventNames)}
 		 GROUP BY ${trackEventTable.name}
 		 ORDER BY count DESC
 		 LIMIT 30
 	`);
-  const list = extractRows<{ name: string; count: number; users: number }>(rows);
   return (list ?? []).map((r) => ({
     name: r.name,
     count: r.count,
@@ -232,18 +255,17 @@ async function getDimensionDistributions(
   const agg = metricAggExpr(metric);
   const entries = await Promise.all(
     ANALYTICS_DIMENSION_KEYS.map(async (key) => {
-      const rows = await db.execute(sql`
-				SELECT COALESCE(${trackEventTable.properties}->>(${key}::text), '未知') AS dim_value,
+      const list = await db.all<{ dim_value: string; count: number }>(sql`
+				SELECT COALESCE(${propertyLabelExpr(key)}, '未知') AS dim_value,
 				       ${agg} AS count
 				  FROM ${trackEventTable}
-				 WHERE ${trackEventTable.time} >= ${start.toISOString()}
-				   AND ${trackEventTable.time} < ${end.toISOString()}
+				 WHERE ${trackEventTable.time} >= ${start.getTime()}
+				   AND ${trackEventTable.time} < ${end.getTime()}
 				   ${eventNameFilter(eventNames)}
 				 GROUP BY dim_value
 				 ORDER BY count DESC
 				 LIMIT 10
 			`);
-      const list = extractRows<{ dim_value: string; count: number }>(rows);
       return [
         key,
         (list ?? []).map((r) => ({
@@ -258,18 +280,17 @@ async function getDimensionDistributions(
 
 /** Top 页面：PageView 事件按页面名聚合 */
 async function getTopPages(start: Date, end: Date): Promise<TopPageItem[]> {
-  const rows = await db.execute(sql`
-		SELECT COALESCE(${trackEventTable.properties}->>'page_name', '未知页面') AS page_name,
-		       COUNT(*)::int AS count
+  const list = await db.all<{ page_name: string; count: number }>(sql`
+		SELECT COALESCE(${propertyLabelExpr("page_name")}, '未知页面') AS page_name,
+		       COUNT(*) AS count
 		  FROM ${trackEventTable}
 		 WHERE ${trackEventTable.name} = 'PageView'
-		   AND ${trackEventTable.time} >= ${start.toISOString()}
-		   AND ${trackEventTable.time} < ${end.toISOString()}
+		   AND ${trackEventTable.time} >= ${start.getTime()}
+		   AND ${trackEventTable.time} < ${end.getTime()}
 		 GROUP BY page_name
 		 ORDER BY count DESC
 		 LIMIT 20
 	`);
-  const list = extractRows<{ page_name: string; count: number }>(rows);
   return (list ?? []).map((r) => ({ pageName: r.page_name, count: r.count }));
 }
 
@@ -295,7 +316,7 @@ export async function getTrackAnalytics(query: TrackAnalyticsQuery): Promise<Tra
     compare = "none",
   } = query;
 
-  // 日期边界按业务统一时区解析，与下方 AT TIME ZONE 'Asia/Shanghai' 分组对齐
+  // 日期边界按业务统一时区解析，与下方时间桶的 '+8 hours' 换算对齐
   const start = toDayRange(startDate).start;
   const end = toDayRange(endDate).end;
 

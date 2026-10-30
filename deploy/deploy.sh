@@ -44,7 +44,14 @@ fi
 APP_PORT="$(grep -E '^APP_PORT=' "$DEPLOY_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || true)"
 APP_PORT="${APP_PORT:-3000}"
 
-mkdir -p "$DEPLOY_DIR/volumes/app" "$DEPLOY_DIR/volumes/db"
+mkdir -p "$DEPLOY_DIR/volumes/app"
+# SQLite 库文件、日志、上传文件都在这个卷里，容器内以 nodejs(1001) 运行：属主不对齐则库文件不可写，
+# 应用启动即 fail-fast（迁移/写入失败）。只对齐属主，不用 chmod 777。
+if [ "$(id -u)" -eq 0 ]; then
+  chown -R 1001:1001 "$DEPLOY_DIR/volumes/app"
+else
+  warn "当前用户非 root，跳过 volumes/app 属主对齐（应为 1001:1001）"
+fi
 
 echo ""
 echo "${C_BOLD}${C_GREEN}═══ HUB 部署 ═══${C_RESET}"
@@ -61,8 +68,9 @@ TAG="$TAG" docker compose -f "$COMPOSE_FILE" --project-directory "$DEPLOY_DIR" p
 ok "新镜像拉取完成"
 
 echo ""
-# up -d 只重建镜像/配置发生变化的容器（通常仅 app），数据库容器保持运行不中断
-info "重建服务（仅变更的容器被替换，数据库容器保持运行）..."
+# up -d 只重建镜像/配置发生变化的容器；--remove-orphans 会把上一版 compose 里的 hub-db 容器一并移除
+# （库已改为 app 卷内的 SQLite 文件，不再有数据库容器）
+info "重建服务（仅变更的容器被替换；上一版残留的 db 容器会被清理）..."
 if ! TAG="$TAG" docker compose -f "$COMPOSE_FILE" --project-directory "$DEPLOY_DIR" up -d --remove-orphans; then
   warn "up -d 失败，回退为 down + up -d 完整重建"
   TAG="$TAG" docker compose -f "$COMPOSE_FILE" --project-directory "$DEPLOY_DIR" down --remove-orphans 2>/dev/null || true

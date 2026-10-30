@@ -1,34 +1,34 @@
 /**
  * 字典表：字典类型定义
  */
-import { pgTable, text, uniqueIndex, varchar } from "drizzle-orm/pg-core";
+import { sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { pk, softDelete, sortable, timestamps } from "./columns";
 
 /** 字典类型 */
-export const dict = pgTable("dict", {
+export const dict = sqliteTable("dict", {
   ...pk(),
-  name: varchar({ length: 100 }).notNull(),
-  slug: varchar({ length: 50 }).unique().notNull(),
-  description: text(),
+  name: text("name").notNull(),
+  slug: text("slug").unique().notNull(),
+  description: text("description"),
   ...timestamps(),
   ...softDelete(),
 });
 
 /** 字典条目 */
-export const dictItem = pgTable(
+export const dictItem = sqliteTable(
   "dict_item",
   {
     ...pk(),
-    dictSlug: varchar("dict_slug", { length: 50 })
+    dictSlug: text("dict_slug")
       .references(() => dict.slug, { onUpdate: "cascade" })
       .notNull(),
-    label: varchar({ length: 100 }).notNull(),
-    value: varchar({ length: 100 }).notNull(),
+    label: text("label").notNull(),
+    value: text("value").notNull(),
     ...sortable(),
-    status: varchar({ length: 20 }).default("active").notNull(),
-    extraType: varchar("extra_type", { length: 20 }),
+    status: text("status").default("active").notNull(),
+    extraType: text("extra_type"),
     extra: text("extra"),
-    color: varchar({ length: 20 }),
+    color: text("color"),
     ...timestamps(),
     ...softDelete(),
   },

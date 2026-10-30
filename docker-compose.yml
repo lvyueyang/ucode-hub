@@ -14,12 +14,11 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: hub-app
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     ports:
       - "${APP_PORT:-3009}:3009"
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5432/app_web}
+      # SQLite 库文件：相对容器 WORKDIR /app，落在 /app/data 卷里
+      DATABASE_URL: ${DATABASE_URL:-./data/data.db}
       STORAGE_DIR: /app/data
       JWT_SECRET: ${JWT_SECRET:-dev-secret-at-least-32-characters-long}
       LOG_LEVEL: ${LOG_LEVEL:-debug}

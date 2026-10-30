@@ -44,38 +44,59 @@ vi.mock("#/shared-services/dict/dict.cache", () => ({
   dictCache: mockDictCache,
 }));
 
-const { mockDb, mockRows } = vi.hoisted(() => {
-  const rows = vi.fn().mockResolvedValue([]);
-  const chain: any = {
-    from: vi.fn(() => chain),
-    where: vi.fn(() => chain),
-    orderBy: vi.fn(() => chain),
-    limit: vi.fn(() => chain),
-    offset: vi.fn(() => chain),
-    innerJoin: vi.fn(() => chain),
+const { mockDb, mockRows, mockTxRows } = vi.hoisted(() => {
+  /** 顶层 db 的行数组（await 路径与 loadDictCache 用） */
+  const rows = vi.fn().mockReturnValue([]);
+  /** 事务内的行数组：事务内一律用终结符同步取值，与顶层分开控制 */
+  const txRows = vi.fn().mockReturnValue([]);
+
+  /** 构造 select 链：各环节返回自身，`.all()` / `.get()` 同步给出行，整体也可 await */
+  const createChain = (source: () => unknown[]) => {
+    const chain: any = {
+      from: vi.fn(() => chain),
+      where: vi.fn(() => chain),
+      orderBy: vi.fn(() => chain),
+      limit: vi.fn(() => chain),
+      offset: vi.fn(() => chain),
+      innerJoin: vi.fn(() => chain),
+      all: vi.fn(() => source()),
+      get: vi.fn(() => source()[0]),
+    };
+    Object.defineProperty(chain, "then", {
+      value: (onFulfilled: (value: unknown) => unknown) =>
+        Promise.resolve(source()).then(onFulfilled),
+    });
+    return chain;
   };
-  Object.defineProperty(chain, "then", {
-    value: (onFulfilled: (value: unknown) => unknown) => rows().then(onFulfilled),
+
+  /** 写入链（update / delete）：事务内以 `.run()` 收尾立即执行 */
+  const createWriteChain = () => {
+    const chain: any = { set: vi.fn(() => chain), where: vi.fn(() => chain), run: vi.fn() };
+    return chain;
+  };
+
+  const createInsert = (): unknown => ({
+    values: vi.fn(() => ({ returning: vi.fn(), run: vi.fn() })),
   });
-  return {
-    mockRows: rows,
-    mockDb: {
-      select: vi.fn(() => chain),
-      $count: vi.fn(),
-      insert: vi.fn(() => ({ values: vi.fn(() => ({ returning: vi.fn() })) })),
-      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
-      delete: vi.fn(() => ({ where: vi.fn() })),
-      transaction: vi.fn(async (fn: (tx: unknown) => Promise<void>) => {
-        const txMock = {
-          select: vi.fn(() => chain),
-          update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
-          insert: vi.fn(() => ({ values: vi.fn() })),
-          delete: vi.fn(() => ({ where: vi.fn() })),
-        };
-        await fn(txMock);
+
+  const mockDb = {
+    select: vi.fn(() => createChain(rows)),
+    $count: vi.fn(),
+    insert: vi.fn(createInsert),
+    update: vi.fn(createWriteChain),
+    delete: vi.fn(createWriteChain),
+    // node:sqlite 的事务回调必须同步，mock 直接同步调用回调，行数组由 txRows 控制
+    transaction: vi.fn((fn: (tx: unknown) => unknown) =>
+      fn({
+        select: vi.fn(() => createChain(txRows)),
+        insert: vi.fn(createInsert),
+        update: vi.fn(createWriteChain),
+        delete: vi.fn(createWriteChain),
       }),
-    },
+    ),
   };
+
+  return { mockDb, mockRows: rows, mockTxRows: txRows };
 });
 vi.mock("#/db", () => ({ db: mockDb, withTransaction: mockDb.transaction }));
 
@@ -232,7 +253,8 @@ describe("ensureSeedDicts", () => {
 describe("importDicts", () => {
   it("导入新字典类型", async () => {
     // existingDicts 查询 + dict findFirst 均返回空
-    mockRows.mockReset().mockResolvedValue([]);
+    mockTxRows.mockReset().mockReturnValue([]);
+    mockRows.mockReset().mockReturnValue([]);
 
     const result = await importDicts({
       dicts: [{ name: "测试字典", slug: "new-dict" }],
@@ -248,11 +270,12 @@ describe("importDicts", () => {
 
   it("更新已有字典类型", async () => {
     // existingDicts 查询空，dict findFirst 命中
-    mockRows
+    mockRows.mockReset().mockReturnValue([]);
+    mockTxRows
       .mockReset()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: "d-1", slug: "dict1" }])
-      .mockResolvedValue([]);
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ id: "d-1", slug: "dict1" }])
+      .mockReturnValue([]);
 
     const result = await importDicts({
       dicts: [{ name: "更新后的字典", slug: "dict1" }],
@@ -265,12 +288,13 @@ describe("importDicts", () => {
 
   it("导入新字典条目", async () => {
     // existingDicts 空 → dict findFirst 命中 → dictItem findFirst 空
-    mockRows
+    mockRows.mockReset().mockReturnValue([]);
+    mockTxRows
       .mockReset()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: "d-1", slug: "dict1" }])
-      .mockResolvedValueOnce([])
-      .mockResolvedValue([]);
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ id: "d-1", slug: "dict1" }])
+      .mockReturnValueOnce([])
+      .mockReturnValue([]);
 
     const result = await importDicts({
       dicts: [{ name: "字典1", slug: "dict1" }],
@@ -284,12 +308,13 @@ describe("importDicts", () => {
 
   it("更新已有字典条目", async () => {
     // existingDicts 空 → dict findFirst 命中 → dictItem findFirst 命中
-    mockRows
+    mockRows.mockReset().mockReturnValue([]);
+    mockTxRows
       .mockReset()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: "d-1", slug: "dict1" }])
-      .mockResolvedValueOnce([{ id: "di-1" }])
-      .mockResolvedValue([]);
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ id: "d-1", slug: "dict1" }])
+      .mockReturnValueOnce([{ id: "di-1" }])
+      .mockReturnValue([]);
 
     const result = await importDicts({
       dicts: [{ name: "字典1", slug: "dict1" }],
@@ -303,7 +328,8 @@ describe("importDicts", () => {
 
   it("跳过未知 dictSlug 的条目", async () => {
     // existingDicts 空 → dict findFirst 空（创建），未知条目被跳过
-    mockRows.mockReset().mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValue([]);
+    mockRows.mockReset().mockReturnValue([]);
+    mockTxRows.mockReset().mockReturnValueOnce([]).mockReturnValueOnce([]).mockReturnValue([]);
 
     const result = await importDicts({
       dicts: [{ name: "字典A", slug: "a" }],
@@ -317,14 +343,15 @@ describe("importDicts", () => {
 
   it("混合导入统计", async () => {
     // existingDicts 空 → dict1 空 → dict2 命中 → item1 空 → item2 命中
-    mockRows
+    mockRows.mockReset().mockReturnValue([]);
+    mockTxRows
       .mockReset()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: "d-2", slug: "existing" }])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: "di-2" }])
-      .mockResolvedValue([]);
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ id: "d-2", slug: "existing" }])
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ id: "di-2" }])
+      .mockReturnValue([]);
 
     const result = await importDicts({
       dicts: [

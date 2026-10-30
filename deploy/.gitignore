@@ -6,7 +6,7 @@ volumes/
 
 # 备份产物
 backup/
-*.dump
+*.bak
 *.tar.gz
 
 # macOS

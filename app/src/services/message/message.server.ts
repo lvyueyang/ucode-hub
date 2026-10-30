@@ -2,7 +2,7 @@
  * 通用消息服务层：消息创建、查询、标记已读、删除 + 外发渠道按用户配置投递
  * 站内信（message 表）为主渠道，恒定义必达；email/webhook/feishu/wecom/dingtalk 为可插拔外发切面。
  */
-import { and, desc, eq, ilike, inArray, or, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, like, or, type SQL } from "drizzle-orm";
 import { db } from "#/db/index";
 import type { UserNotifyChannels } from "#/db/schema";
 import {
@@ -199,7 +199,7 @@ export async function markAsRead(id: string, user: UserRef): Promise<boolean> {
     .set({ status: "read", updatedAt: new Date() })
     .where(and(eq(message.id, id), ...userConditions(user)));
 
-  return (result.rowCount ?? 0) > 0;
+  return Number(result.changes) > 0;
 }
 
 /**
@@ -211,7 +211,7 @@ export async function markAllRead(user: UserRef): Promise<number> {
     .set({ status: "read", updatedAt: new Date() })
     .where(and(...userConditions(user), eq(message.status, "unread")));
 
-  return result.rowCount ?? 0;
+  return Number(result.changes);
 }
 
 /**
@@ -223,7 +223,7 @@ export async function deleteMessage(id: string, user: UserRef): Promise<boolean>
     .set({ deletedAt: new Date(), updatedAt: new Date() })
     .where(and(eq(message.id, id), ...userConditions(user)));
 
-  return (result.rowCount ?? 0) > 0;
+  return Number(result.changes) > 0;
 }
 
 /**
@@ -279,7 +279,7 @@ export async function listMessages(
     conditions.push(eq(message.type, params.type));
   }
   if (params.keyword) {
-    conditions.push(ilike(message.title, `%${params.keyword}%`));
+    conditions.push(like(message.title, `%${params.keyword}%`));
   }
 
   const whereCondition = and(...conditions);
@@ -328,7 +328,7 @@ export async function sendMessages(params: SendMessagesParams): Promise<number> 
     );
   }
 
-  return result.rowCount ?? rows.length;
+  return Number(result.changes);
 }
 
 /**
@@ -340,7 +340,7 @@ export async function deleteMessageById(id: string): Promise<boolean> {
     .set({ deletedAt: new Date(), updatedAt: new Date() })
     .where(and(eq(message.id, id), notDeleted(message.deletedAt)));
 
-  return (result.rowCount ?? 0) > 0;
+  return Number(result.changes) > 0;
 }
 
 /**
@@ -354,12 +354,12 @@ export async function searchRecipients(params: {
   const limit = 20;
 
   const adminKeywordCondition = or(
-    ilike(adminUser.username, keyword),
-    ilike(adminUser.email, keyword),
+    like(adminUser.username, keyword),
+    like(adminUser.email, keyword),
   );
   const clientKeywordCondition = or(
-    ilike(clientUser.username, keyword),
-    ilike(clientUser.email, keyword),
+    like(clientUser.username, keyword),
+    like(clientUser.email, keyword),
   );
 
   if (params.userType === "admin") {

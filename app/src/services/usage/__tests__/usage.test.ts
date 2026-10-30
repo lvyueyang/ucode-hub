@@ -1,6 +1,6 @@
 /**
  * 用量服务层测试：落库、筛选条件构造、列表补名、汇总口径（均不连 DB）
- * 查询链桩记录 where / orderBy 入参，用 PgDialect 反解成 SQL 后断言筛选条件。
+ * 查询链桩记录 where / orderBy 入参，用 SQLiteDialect 反解成 SQL 后断言筛选条件。
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,7 +13,7 @@ const { mockDb, state } = vi.hoisted(() => {
     inserted: [] as Record<string, unknown>[],
     count: 0,
     executeRows: [] as unknown[],
-    /** 每次 db.execute 的入参（整段聚合 SQL），供断言筛选条件 */
+    /** 每次 db.all 的入参（整段聚合 SQL），供断言筛选条件 */
     executed: [] as unknown[],
   };
 
@@ -45,9 +45,9 @@ const { mockDb, state } = vi.hoisted(() => {
         state.inserted.push(values);
       }),
     })),
-    execute: vi.fn(async (...args: unknown[]) => {
+    all: vi.fn(async (...args: unknown[]) => {
       state.executed.push(args[0]);
-      return { rows: state.executeRows };
+      return state.executeRows;
     }),
   };
 
@@ -56,7 +56,7 @@ const { mockDb, state } = vi.hoisted(() => {
 
 vi.mock("#/db", () => ({ db: mockDb }));
 
-import { PgDialect } from "drizzle-orm/pg-core";
+import { SQLiteDialect } from "drizzle-orm/sqlite-core";
 
 import {
   listUsageForAdmin,
@@ -65,7 +65,7 @@ import {
   usageTotalsForOwner,
 } from "../usage.server";
 
-const dialect = new PgDialect();
+const dialect = new SQLiteDialect();
 
 /** 反解一条 where / orderBy 子句为 SQL 与参数，用于断言筛选条件确实进了 SQL */
 const toSql = (clause: unknown): { sql: string; params: unknown[] } =>
@@ -220,9 +220,10 @@ describe("listUsageForAdmin", () => {
       expect(params).toContain("%deepseek%");
       expect(params).toContain("client");
       expect(params).toContain("error");
-      // 日期按业务时区解析成绝对时刻：起点 2026-10-01 00:00 +08:00，排他上界为次日 00:00
-      expect(params).toContain("2026-09-30T16:00:00.000Z");
-      expect(params).toContain("2026-10-02T16:00:00.000Z");
+      // 日期按业务时区解析成绝对时刻，再经 timestamp_ms 列编码成毫秒：
+      // 起点 2026-10-01 00:00 +08:00，排他上界为次日 00:00
+      expect(params).toContain(new Date("2026-09-30T16:00:00.000Z").getTime());
+      expect(params).toContain(new Date("2026-10-02T16:00:00.000Z").getTime());
     }
   });
 

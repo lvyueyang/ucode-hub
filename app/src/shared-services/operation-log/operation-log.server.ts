@@ -6,7 +6,7 @@
 
 import { BatchWriter, type BatchWriterEvent } from "@ucode/hub-lib/batch-writer";
 import { toDayRange } from "@ucode/hub-lib/date-format";
-import { and, eq, gte, ilike, lt, or, type SQLWrapper } from "drizzle-orm";
+import { and, eq, gte, like, lt, or, type SQLWrapper } from "drizzle-orm";
 import { db } from "#/db/index";
 import { type OperatorType, operationLog } from "#/db/schema";
 import { logger } from "#/shared-services/logger";
@@ -176,9 +176,9 @@ export async function searchOperationLogs(
   if (keyword) {
     conditions.push(
       or(
-        ilike(operationLog.operatorName, `%${keyword}%`),
-        ilike(operationLog.targetName, `%${keyword}%`),
-        ilike(operationLog.module, `%${keyword}%`),
+        like(operationLog.operatorName, `%${keyword}%`),
+        like(operationLog.targetName, `%${keyword}%`),
+        like(operationLog.module, `%${keyword}%`),
       ),
     );
   }

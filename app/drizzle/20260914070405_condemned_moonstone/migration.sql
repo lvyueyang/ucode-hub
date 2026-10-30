@@ -1,1 +1,0 @@
-ALTER TABLE "system_config" ADD COLUMN "is_secret" boolean DEFAULT false NOT NULL;

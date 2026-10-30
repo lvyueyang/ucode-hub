@@ -1,1 +1,0 @@
-ALTER TABLE "operation_log" ADD COLUMN "request_id" varchar(100);

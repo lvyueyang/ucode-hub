@@ -1,21 +1,14 @@
 /**
- * e2e 环境工具：从应用 env 文件推导隔离数据库连接串
+ * e2e 环境工具：从应用 env 文件推导隔离数据库文件路径
  */
 
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, parse, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
 /** app 包目录（由本文件位置向上两级） */
 export const APP_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-
-/**
- * e2e 专用隔离数据库名：可经 E2E_DB_NAME 覆盖，默认取开发库名 + _e2e 后缀（避免硬编码品牌库名）
- * 注意：必须在 APP_DIR 初始化之后求值（loadAppEnv 依赖 APP_DIR）
- */
-export const E2E_DB_NAME =
-  process.env.E2E_DB_NAME ?? `${new URL(loadAppEnv().DATABASE_URL).pathname.slice(1) || "app"}_e2e`;
 
 /** 加载 app/.env 与 app/.env.local（.env.local 优先级更高，与 dev 行为一致） */
 function loadAppEnv(): Record<string, string> {
@@ -30,16 +23,27 @@ function loadAppEnv(): Record<string, string> {
   return merged;
 }
 
-/** 获取 e2e 数据库连接串（复用本地数据库凭据，仅替换库名） */
-export function getE2eDbUrl(): string {
-  const url = new URL(loadAppEnv().DATABASE_URL);
-  url.pathname = `/${E2E_DB_NAME}`;
-  return url.toString();
+/** 开发库文件路径：去掉 DATABASE_URL 可选的 file: 前缀，相对路径按 app 目录解析（与 app 的取值口径一致） */
+function getBaseDbPath(): string {
+  const url = loadAppEnv().DATABASE_URL ?? "./data/data.db";
+  return resolve(APP_DIR, url.replace(/^file:/, ""));
 }
 
-/** 获取建库用维护连接串（连到默认 postgres 库） */
-export function getMaintenanceDbUrl(): string {
-  const url = new URL(loadAppEnv().DATABASE_URL);
-  url.pathname = "/postgres";
-  return url.toString();
+/**
+ * e2e 隔离库文件路径：可经 E2E_DB_URL 覆盖，默认在基础库文件名上加 _e2e 后缀（data.db → data_e2e.db）
+ *
+ * 基准路径只从 env 文件推导，不读 process.env.DATABASE_URL：playwright 的 webServer 会把 e2e 路径
+ * 写进 DATABASE_URL 交给整条命令（prepare.ts 也在其中），以它为准会再套一次后缀、越推越深。
+ */
+export function getE2eDbPath(): string {
+  const override = process.env.E2E_DB_URL;
+  if (override) return resolve(APP_DIR, override.replace(/^file:/, ""));
+  const base = getBaseDbPath();
+  const { dir, name } = parse(base);
+  return join(dir, `${name}_e2e.db`);
+}
+
+/** e2e 数据库路径（名沿用 URL 语义：它就是要传给应用的 DATABASE_URL，playwright.config 依赖此名） */
+export function getE2eDbUrl(): string {
+  return getE2eDbPath();
 }

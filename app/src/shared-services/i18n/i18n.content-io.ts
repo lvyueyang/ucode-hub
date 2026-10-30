@@ -75,9 +75,10 @@ export async function importContentTranslations(
   let created = 0;
   let updated = 0;
 
-  await withTransaction(async (tx) => {
+  // node:sqlite 的事务回调必须同步，事务内一律用终结符（.run()/.all()）立即执行
+  withTransaction((tx) => {
     // 统计：单次查询已存在的唯一键，据此判定新增/更新，避免逐条 select
-    const existingRows = await tx
+    const existingRows = tx
       .select({
         entityType: contentTranslation.entityType,
         entityId: contentTranslation.entityId,
@@ -90,7 +91,8 @@ export async function importContentTranslations(
           inArray(contentTranslation.entityType, entityTypes),
           inArray(contentTranslation.locale, locales),
         ),
-      );
+      )
+      .all();
     const existingKeys = new Set(
       existingRows.map(
         (row) => `${row.entityType}::${row.entityId}::${row.fieldName}::${row.locale}`,
@@ -103,8 +105,7 @@ export async function importContentTranslations(
     }
 
     // 批量原子 upsert：事务内整批一次写入，基于唯一约束冲突更新
-    await tx
-      .insert(contentTranslation)
+    tx.insert(contentTranslation)
       .values(batch)
       .onConflictDoUpdate({
         target: [
@@ -118,7 +119,8 @@ export async function importContentTranslations(
           valueType: sql`excluded.value_type`,
           updatedAt: new Date(),
         },
-      });
+      })
+      .run();
   });
 
   // 导入可能改写 system_config 翻译，导入后刷新对应语言配置翻译缓存（修复此前未同步的隐患）

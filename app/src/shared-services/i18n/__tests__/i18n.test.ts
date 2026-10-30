@@ -27,7 +27,7 @@ vi.mock("#/shared-services/i18n/i18n.ui.cache", () => ({
 }));
 
 const { mockDb, mockRows, insertValues, onConflictDoUpdate } = vi.hoisted(() => {
-  const rows = vi.fn().mockResolvedValue([]);
+  const rows = vi.fn().mockReturnValue([]);
   const chain: any = {
     from: vi.fn(() => chain),
     where: vi.fn(() => chain),
@@ -35,11 +35,15 @@ const { mockDb, mockRows, insertValues, onConflictDoUpdate } = vi.hoisted(() => 
     limit: vi.fn(() => chain),
     offset: vi.fn(() => chain),
     innerJoin: vi.fn(() => chain),
+    // 事务内以 .all() 同步取值，故终结符返回行数组本身
+    all: vi.fn(() => rows()),
+    get: vi.fn(() => rows()[0]),
   };
   Object.defineProperty(chain, "then", {
-    value: (onFulfilled: (value: unknown) => unknown) => rows().then(onFulfilled),
+    value: (onFulfilled: (value: unknown) => unknown) => Promise.resolve(rows()).then(onFulfilled),
   });
-  const onConflictDoUpdate = vi.fn();
+  // 事务内 upsert 以 .run() 收尾，故 onConflictDoUpdate 之后还要能续 .run()（顶层 await 同一形态也成立）
+  const onConflictDoUpdate = vi.fn(() => ({ run: vi.fn() }));
   // insert(...).values(batch) 返回 { onConflictDoUpdate } 供 upsert / 导入链式调用
   const insertValues = vi.fn((..._args: unknown[]) => ({
     onConflictDoUpdate,
@@ -54,7 +58,8 @@ const { mockDb, mockRows, insertValues, onConflictDoUpdate } = vi.hoisted(() => 
       insert: vi.fn(() => ({ values: insertValues })),
       update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
       delete: vi.fn(() => ({ where: vi.fn() })),
-      transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb(mockDb)),
+      // node:sqlite 的事务回调必须同步，mock 同步调用回调（事务内一律用终结符）
+      transaction: vi.fn((cb: (tx: unknown) => unknown) => cb(mockDb)),
     },
   };
 });
@@ -365,7 +370,7 @@ describe("importContentTranslations", () => {
 
   it("在事务中批量导入并统计新增/更新", async () => {
     // 预查询已有唯一键：仅 news::n-1::title::en 存在 → 该条更新，n-2 新增
-    mockRows.mockReset().mockResolvedValue([ctRecord]);
+    mockRows.mockReset().mockReturnValue([ctRecord]);
 
     const result = await importContentTranslations({
       translations: [
@@ -396,7 +401,7 @@ describe("importContentTranslations", () => {
   });
 
   it("非法的 valueType 回退到 text，且不污染入参", async () => {
-    mockRows.mockReset().mockResolvedValue([]);
+    mockRows.mockReset().mockReturnValue([]);
     const input = {
       translations: [
         {

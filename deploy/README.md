@@ -6,11 +6,11 @@
 
 | 文件 | 用途 |
 |------|------|
-| `docker-compose.yml` | 生产环境 docker compose 配置（db + app，内置 PostgreSQL） |
+| `docker-compose.yml` | 生产环境 docker compose 配置（单 app 服务，SQLite 库文件落在 app 数据卷内） |
 | `deploy.sh` | 一键部署/更新脚本 |
-| `backup.sh` | 全量备份脚本（数据库逻辑备份 + 应用数据打包，在线热备） |
-| `preflight-migrations.sh` | 迁移预检（部署前校验迁移表与镜像迁移文件夹一致性） |
-| `restore.sh` | 恢复脚本（数据库 + 应用数据） |
+| `backup.sh` | 全量备份脚本（SQLite 在线快照 + 应用数据打包，无需停服） |
+| `preflight-migrations.sh` | 迁移预检（部署前校验库内迁移记录与镜像迁移文件夹一致性） |
+| `restore.sh` | 恢复脚本（库快照 + 应用数据） |
 | `nginx.conf.example` | 宿主机反代样例（TLS、WS 升级、事件流不缓冲、泛子域 ingress） |
 | `.env.example` | 环境变量模板（复制为 `.env` 填写） |
 | `VERSION` | 部署配置版本号 |
@@ -19,7 +19,7 @@
 
 ```bash
 # 首次部署（服务器上）
-cp .env.example .env   # 填写 POSTGRES_* 与 JWT_SECRET
+cp .env.example .env   # 填写 JWT_SECRET（DATABASE_URL 用模板默认值即可）
 TAG=latest ./deploy.sh
 
 # 后续更新
@@ -35,11 +35,17 @@ TAG=latest ./deploy.sh
             │  proxy_pass http://127.0.0.1:3009
             ▼
     docker compose
-    ├── app (hub-app :3009)    # 镜像 ghcr.io/ucode/hub:${TAG}，nodejs 用户运行
-    │     └── volumes/app       # 日志、上传文件（宿主属主 1001:1001）
-    └── db  (hub-db :14010)    # postgres:18-alpine
-          └── volumes/db        # PostgreSQL 数据卷
+    └── app (hub-app :3009)    # 镜像 ghcr.io/ucode/hub:${TAG}，nodejs 用户运行
+          └── volumes/app       # 应用数据 + SQLite 库 data.db（宿主属主 1001:1001）
 ```
+
+数据库是应用进程内的 SQLite 单文件库（`node:sqlite`），库文件 `data.db` 与其 `-wal` / `-shm`
+三件套必须一起留在 `volumes/app` 卷里：换路径或丢卷等于换库。`deploy.sh` 会把该目录属主对齐到容器内运行用户
+（1001:1001），库文件不可写时应用启动即 fail-fast。
+
+> **从 PostgreSQL 版本切过来的一次性处理**：上一版的 `hub-db` 容器由 `deploy.sh` 的 `--remove-orphans` 自动移除，
+> 但 PostgreSQL 数据不会迁移到 SQLite（结构不兼容），所以首次切换前必须用旧方式把数据导出并另存，
+> 确认不再需要后再自行删除 `volumes/db`；SQLite 新库由应用启动时自动建表（全量基线迁移），初始为空库。
 
 ## 反代与域名（逐企业交付必读）
 
@@ -70,8 +76,8 @@ TAG=latest ./deploy.sh
 
 - **迁移唯一生效入口**：app 容器启动时 `bootstrap → runMigrations()`（drizzle-orm migrator）自动执行镜像内 `/app/drizzle` 的迁移文件；**迁移失败即应用启动崩溃（fail-fast）**
 - `deploy.sh` 不显式执行迁移；`up -d` 后等待 app 健康检查通过即为迁移成功（fail-fast 语义下健康检查即迁移结果）
-- 迁移记录表：`drizzle.__drizzle_migrations`。匹配语义分两种：**v1 表（含 `name` 列）按完整文件夹名匹配**；**v0 表（旧版写入）按 `created_at`（UTC 毫秒）时间戳匹配**
-- **孤儿记录风险**：`preflight-migrations.sh` 自动检测迁移表版本并按其匹配语义比对。v0 表存在孤儿记录会导致升级时 migrator 直接报错、应用启动即崩；v1 表孤儿会被静默忽略，仅当属文件夹改名遗留时才需同步删除。升级前务必先跑预检
+- 迁移记录表：`__drizzle_migrations`（SQLite 单文件库，无 schema 前缀；镜像里没有 `sqlite3` CLI，查询只能走容器内 `node:sqlite`）。匹配语义分两种：**v1 表（含 `name` 列）按完整文件夹名匹配**；**v0 表（更早的 drizzle-orm 写入，无 `name` 列）在启动时先升级表结构**
+- **孤儿记录风险**：`preflight-migrations.sh` 读库内记录并与镜像迁移文件夹比对（需 `hub-app` 运行中；首次部署自动跳过）。v0 表存在孤儿记录会让升级报错、应用启动即崩；v1 表孤儿会被静默忽略，仅当属文件夹改名遗留时才需同步删除。升级前务必先跑预检
 
 ## 版本升级流程
 
@@ -79,17 +85,22 @@ TAG=latest ./deploy.sh
 
 ```bash
 cd /opt/hub
-./backup.sh            # 交互确认后生成 backup/db-<ts>.dump + backup/app-data-<ts>.tar.gz
+./backup.sh            # 交互确认后生成 backup/db-<ts>.bak + backup/app-data-<ts>.tar.gz
 ```
 
-输出为全量逻辑备份（pg_dump 自定义格式，可在任意库上 `pg_restore` 恢复）+ 应用数据压缩包，自动校验并保留最近 3 天（`RETENTION_DAYS` 可调）。**交互确认**：开始备份与清理过期备份前均需输入 `y` 确认，`./backup.sh -y` 跳过（cron 等非交互场景必须用 `-y`）。
+输出两份产物，自动校验并保留最近 3 天（`RETENTION_DAYS` 可调）：
 
-如需物理快照双保险（可选，需停库）：
+- `db-<ts>.bak`：容器内 `VACUUM INTO` 得到的库在线一致快照（单文件，直接就是可用的 SQLite 库）
+- `app-data-<ts>.tar.gz`：除库文件（`data.db` / `-wal` / `-shm`）外的应用数据，如上传文件、日志
+
+**交互确认**：开始备份与清理过期备份前均需输入 `y` 确认，`./backup.sh -y` 跳过（cron 等非交互场景必须用 `-y`）。
+
+如需整体物理快照双保险（可选，需停服）：
 
 ```bash
-docker compose stop db
-tar czf backup/volumes-db-$(date +%Y%m%d%H%M%S).tar.gz volumes/db
-docker compose start db
+docker compose stop app
+tar czf backup/volumes-app-$(date +%Y%m%d%H%M%S).tar.gz volumes/app
+docker compose start app
 ```
 
 ### 2. 迁移预检（必做）
@@ -99,8 +110,9 @@ cd /opt/hub
 TAG=<新版本号> ./preflight-migrations.sh     # 交互确认后执行，-y 跳过
 ```
 
-- 输出「孤儿记录（DB 有而镜像无）」与「缺失记录（本次待执行的新迁移）」两类结论
-- 发现孤儿记录：按脚本提示的 DELETE SQL，**人工确认后**删除对应迁移表记录（保留备份后再删）
+- 输出「孤儿记录（库中有而镜像无）」与「缺失记录（本次待执行的新迁移）」两类结论
+- 发现孤儿记录：按脚本提示的 DELETE SQL，**人工确认后**删除对应迁移记录（保留备份后再删）
+- 脚本只读诊断，不做任何写入；不传 `-y` 会先要一次交互确认
 
 ### 3. 执行升级
 
@@ -119,26 +131,25 @@ docker compose ps
 docker compose logs -f app | grep -i migrat    # 确认迁移执行日志
 curl -s http://127.0.0.1:3009/health
 
-# 迁移表应含 hash 列、created_at 为毫秒且新迁移已应用
-docker compose exec -T db psql -U <user> -d <db> -c \
-  "SELECT id, created_at, left(hash,8) FROM drizzle.__drizzle_migrations ORDER BY created_at DESC LIMIT 5"
+# 迁移记录应含 name 列、新迁移已写入
+docker compose exec -T app node -e "const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync((process.env.DATABASE_URL||'./data/data.db').replace(/^file:/,''));console.log(JSON.stringify(db.prepare('SELECT id, name, created_at FROM __drizzle_migrations ORDER BY created_at DESC LIMIT 5').all(), null, 2));db.close()"
 
 # 业务核心页面冒烟（管理后台登录、首页、关键模块）
 ```
 
 ## 恢复
 
-> 恢复期间写入会丢失，建议先 `docker compose stop app` 再恢复，完成后 `docker compose start app`。
+> 恢复期间写入会丢失：脚本会**自动停止 app 容器**（SQLite 单文件库被替换时必须先停写，否则进程会写到已删除的 inode 上），恢复完成后由运维手动 `docker compose start app`。
 > 破坏性操作默认要求交互确认（输入 `y`），非交互/脚本执行必须显式加 `-f`。
-> 应用数据恢复为 tar 解包覆盖同名文件，**备份后新增/残留的文件不会被清除**；如需完全一致请先清空 `volumes/app`。
+> 应用数据恢复为 tar 解包覆盖同名文件（备份已排除库文件），**备份后新增/残留的文件不会被清除**；如需完全一致请先清空 `volumes/app` 再用 `db` 模式单独恢复库。
 
 ```bash
 cd /opt/hub
-# 全部恢复（按时间戳前缀匹配 backup/db-<ts>.dump 与 app-data-<ts>.tar.gz）
+# 全部恢复（按时间戳前缀匹配 backup/db-<ts>.bak 与 app-data-<ts>.tar.gz）
 ./restore.sh all 20260822090000
 
 # 仅数据库
-./restore.sh db /opt/hub/backup/db-20260822090000.dump
+./restore.sh db /opt/hub/backup/db-20260822090000.bak
 # 仅应用数据
 ./restore.sh app /opt/hub/backup/app-data-20260822090000.tar.gz
 
@@ -146,7 +157,9 @@ cd /opt/hub
 ./restore.sh -f all 20260822090000
 ```
 
-数据库恢复为覆盖式（`pg_restore --clean --if-exists`），`pg_dump` 逻辑备份跨 PostgreSQL 版本可恢复；恢复后应用启动会自动重新核对迁移。
+数据库恢复为整文件替换（停服后清掉 `data.db` / `-wal` / `-shm` 三件套，再拷入快照，恢复后属主对齐 1001:1001）；快照在备份时已做 `PRAGMA integrity_check`，恢复后应用启动会自动重新核对迁移。
+
+> 回灌到不同机器时同样适用：整卷 `volumes/app`（含库文件）是自包含的，`docker compose stop app` 后整体打包拷出、放到目标机解包并把属主对齐 1001:1001 即可。
 
 ## 回滚
 
@@ -157,7 +170,7 @@ TAG=<旧版本号> ./deploy.sh
 ```
 
 - 仅代码/配置回滚：上述命令即可
-- 数据库结构已变更且业务异常：用升级前备份执行 `restore.sh` 恢复数据库后，再回滚应用
+- 数据库结构已变更且业务异常：用升级前备份执行 `restore.sh db`（或 `all`）恢复库与数据，再回滚应用
 
 ## 定期备份（cron）
 

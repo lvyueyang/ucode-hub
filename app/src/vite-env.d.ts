@@ -6,7 +6,7 @@ declare global {
 
   namespace NodeJS {
     interface ProcessEnv {
-      /** PostgreSQL 连接 URL */
+      /** SQLite 数据库文件路径 */
       DATABASE_URL: string;
       /** JWT access token 密钥（至少 32 字符） */
       JWT_SECRET: string;

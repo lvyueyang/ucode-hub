@@ -68,7 +68,7 @@ const { mockDb } = vi.hoisted(() => {
         })),
       })),
       delete: vi.fn(() => ({ where: vi.fn(() => Promise.resolve()) })),
-      execute: vi.fn(() => Promise.resolve({ rows: [] })),
+      all: vi.fn(() => Promise.resolve([] as unknown[])),
     },
   };
 });
@@ -472,21 +472,19 @@ describe("getTrackAnalytics", () => {
 
   it("聚合返回趋势、排行、维度与 KPI", async () => {
     // 所有聚合查询统一返回同一行，覆盖各子查询所需字段
-    mockDb.execute.mockResolvedValue({
-      rows: [
-        {
-          date: "2024-01-01",
-          series: null,
-          value: 3,
-          name: "PageView",
-          count: 3,
-          users: 1,
-          total: 5,
-          dim_value: "Desktop",
-          page_name: "/home",
-        },
-      ],
-    } as any);
+    mockDb.all.mockResolvedValue([
+      {
+        date: "2024-01-01",
+        series: null,
+        value: 3,
+        name: "PageView",
+        count: 3,
+        users: 1,
+        total: 5,
+        dim_value: "Desktop",
+        page_name: "/home",
+      },
+    ]);
 
     const result = await getTrackAnalytics(baseQuery);
 
@@ -504,7 +502,7 @@ describe("getTrackAnalytics", () => {
   });
 
   it("无数据时返回空结构", async () => {
-    mockDb.execute.mockResolvedValue({ rows: [] } as any);
+    mockDb.all.mockResolvedValue([]);
 
     const result = await getTrackAnalytics(baseQuery);
 
@@ -516,7 +514,7 @@ describe("getTrackAnalytics", () => {
   });
 
   it("带拆解维度时先经元属性白名单校验", async () => {
-    mockDb.execute.mockResolvedValue({ rows: [] } as any);
+    mockDb.all.mockResolvedValue([]);
     const limit = vi.fn(() => Promise.resolve([{ key: "$device_type" }]));
     mockDb.select.mockReturnValueOnce({
       from: vi.fn(() => ({ where: vi.fn(() => ({ limit })) })),
@@ -529,20 +527,18 @@ describe("getTrackAnalytics", () => {
   });
 
   it("compare=year 合并同比窗口并给出 deltas（闰日不报错）", async () => {
-    mockDb.execute.mockResolvedValue({
-      rows: [
-        {
-          date: "2024-02-29",
-          value: 4,
-          total: 4,
-          users: 2,
-          name: "PageView",
-          count: 4,
-          dim_value: "Desktop",
-          page_name: "/home",
-        },
-      ],
-    } as any);
+    mockDb.all.mockResolvedValue([
+      {
+        date: "2024-02-29",
+        value: 4,
+        total: 4,
+        users: 2,
+        name: "PageView",
+        count: 4,
+        dim_value: "Desktop",
+        page_name: "/home",
+      },
+    ]);
 
     const result = await getTrackAnalytics({
       startDate: "2024-02-29",

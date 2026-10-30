@@ -47,7 +47,7 @@ function toErrorMessage(error: unknown): string {
 async function checkDatabase(): Promise<HealthCheckResult> {
   const start = performance.now();
   try {
-    await db.execute(sql`SELECT 1`);
+    await db.all(sql`SELECT 1`);
     return {
       status: "up",
       latencyMs: Math.round(performance.now() - start),

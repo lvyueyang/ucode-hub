@@ -16,7 +16,7 @@ export default defineConfig({
     // 必需环境变量：env 模块要求必需项齐备，缺失会在模块导入期直接抛错；
     // 各用例仍可自行覆盖（如 file-explorer 按 describe 分配独立的 STORAGE_DIR）
     env: {
-      DATABASE_URL: "postgres://test:test@localhost:5432/testdb",
+      DATABASE_URL: ":memory:",
       JWT_SECRET: "test-jwt-secret-at-least-32-characters-long!!",
       STORAGE_DIR: ".tmp",
     },

@@ -18,15 +18,6 @@ export function paginationOffset(page: number, pageSize: number): number {
 }
 
 /**
- * 从 db.execute 结果中提取行数组
- * drizzle v1 的 node-postgres 驱动返回 `{ rows }` 结构而非数组，类型声明未覆盖该形态，
- * 故在此单点收敛断言，调用方按预期行类型取值（缺 rows 时返回空数组）
- */
-export function extractRows<T>(result: unknown): T[] {
-  return (result as { rows?: T[] }).rows ?? [];
-}
-
-/**
  * 安全构建排序子句：通过字段映射表校验 sortField，防止非法字段注入
  * @param fieldMap 排序字段映射表（key → 列对象）
  * @param sortField 前端传入的排序字段名

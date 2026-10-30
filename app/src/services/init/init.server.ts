@@ -2,8 +2,8 @@
  * 系统初始化服务：首次启动时的超级管理员创建与配置写入
  */
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
-import { db, withTransaction } from "#/db/index";
+import { eq, sql } from "drizzle-orm";
+import { db } from "#/db/index";
 import { adminRole, adminUser, clientRole } from "#/db/schema";
 import { loadConfigCache, upsertConfig } from "#/shared-services/config/config.server";
 import { logger } from "#/shared-services/logger";
@@ -57,21 +57,25 @@ export async function initSystem(data: InitData): Promise<{
 }> {
   const { admin, siteName, smtp, ai, sms } = data;
 
-  // 使用事务包裹，避免并发初始化
-  return withTransaction(async (tx) => {
+  // 事务包裹避免并发初始化；node:sqlite 的事务回调必须同步，而初始化含 bcrypt 与配置写入等异步操作，
+  // 故走手动事务（BEGIN/COMMIT），早退路径必须先回滚，否则事务悬挂
+  db.run(sql.raw("BEGIN"));
+  try {
     // 事务内再次校验：防止并发场景下重复初始化
-    const [existingRoot] = await tx
+    const [existingRoot] = db
       .select()
       .from(adminUser)
       .where(eq(adminUser.isRoot, true))
-      .limit(1);
+      .limit(1)
+      .all();
 
     if (existingRoot) {
+      db.run(sql.raw("ROLLBACK"));
       return { success: false, message: "系统已初始化，禁止重复操作" };
     }
 
     // 1. 创建超级管理员角色（幂等：如已存在则先查后返）
-    const [superRole] = await tx
+    const [superRole] = db
       .insert(adminRole)
       .values({
         name: "超级管理员",
@@ -80,12 +84,13 @@ export async function initSystem(data: InitData): Promise<{
         description: "拥有全部权限的超级管理员角色",
       })
       .onConflictDoNothing()
-      .returning();
+      .returning()
+      .all();
 
     // onConflictDoNothing 返回空数组表示记录已存在，此时查询已有记录
     const effectiveRole =
       superRole ??
-      (await tx.select().from(adminRole).where(eq(adminRole.slug, "super-admin")).limit(1))[0];
+      db.select().from(adminRole).where(eq(adminRole.slug, "super-admin")).limit(1).all()[0];
 
     if (!effectiveRole) {
       throw new Error("无法创建或查找超级管理员角色");
@@ -109,24 +114,28 @@ export async function initSystem(data: InitData): Promise<{
       },
     ];
     for (const seed of clientRoleSeeds) {
-      const [existing] = await tx
+      const [existing] = db
         .select()
         .from(clientRole)
         .where(eq(clientRole.slug, seed.slug))
-        .limit(1);
+        .limit(1)
+        .all();
       if (existing) continue;
-      await tx.insert(clientRole).values({
-        name: seed.name,
-        slug: seed.slug,
-        permissions: seed.permissions,
-        description: seed.description,
-      });
+      db.insert(clientRole)
+        .values({
+          name: seed.name,
+          slug: seed.slug,
+          permissions: seed.permissions,
+          description: seed.description,
+        })
+        .run();
     }
     logger.info({ count: clientRoleSeeds.length }, "客户端预置角色已创建");
 
     // 2. 创建 root 管理员用户
-    const passwordHash = await bcrypt.hash(admin.password, 10);
-    const [rootUser] = await tx
+    // 与其它口令写入点统一 cost 12：cost 偏低会让离线破解便宜一截
+    const passwordHash = await bcrypt.hash(admin.password, 12);
+    const [rootUser] = db
       .insert(adminUser)
       .values({
         username: admin.username,
@@ -134,9 +143,12 @@ export async function initSystem(data: InitData): Promise<{
         passwordHash,
         adminRoleIds: [effectiveRole.id],
         isRoot: true,
+        // 初始化时由部署者亲自填写的邮箱视为已确认：它是超管「忘记密码」的恢复通道
+        emailVerified: true,
         status: "active",
       })
-      .returning();
+      .returning()
+      .all();
 
     logger.info({ userId: rootUser.id, username: rootUser.username }, "Root 管理员用户已创建");
 
@@ -231,7 +243,11 @@ export async function initSystem(data: InitData): Promise<{
     // 7. 重新加载配置缓存，确保 getConfig 能读取到最新值
     await loadConfigCache();
 
+    db.run(sql.raw("COMMIT"));
     logger.info("系统初始化完成");
     return { success: true, message: "系统初始化完成，请使用创建的账号登录" };
-  });
+  } catch (error) {
+    db.run(sql.raw("ROLLBACK"));
+    throw error;
+  }
 }

@@ -28,15 +28,14 @@ Dockerfile            # 生产镜像（构建上下文是本仓库根）
 三步（第一条只需跑一次）：
 
 ```bash
-# 1) 本地 PostgreSQL（./docker-compose.dev.yml；库/用户/密码都是 hub，127.0.0.1:15432）
-pnpm db:up                # 等价于在 UCode 仓库根跑 pnpm db:hub:up
+# 1) 无需数据库服务：SQLite 库文件在首次启动时自动建（默认 ./data/data.db，目录会自动创建）
 
-# 2) 配置：cp app/.env.example app/.env，把 DATABASE_URL 改成上一行那个库、填 JWT_SECRET 与 STORAGE_DIR。
+# 2) 配置：cp app/.env.example app/.env，填 DATABASE_URL（库文件路径）、JWT_SECRET 与 STORAGE_DIR。
 #    （不想落文件也可以每次命令行传这三个变量：DATABASE_URL=… JWT_SECRET=… STORAGE_DIR=…）
 
 # 3) 起服务
-pnpm dev:hub              # vite dev；浏览器用 http://localhost:3009（只监听 [::1]，127.0.0.1 会拒连）
-#   或跑产物：pnpm build:hub && pnpm start:hub
+pnpm dev                # vite dev；浏览器用 http://localhost:3009（只监听 [::1]，127.0.0.1 会拒连）
+#   或跑产物：pnpm build && pnpm start
 ```
 
 首次访问 `http://localhost:3009/admin` 会跳到 `/admin/init` 初始化超管账号（**唯一超管、自助**），

@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockDb } = vi.hoisted(() => ({
-  mockDb: { execute: vi.fn() },
+  mockDb: { all: vi.fn() },
 }));
 
 vi.mock("#/db", () => ({ db: mockDb }));
@@ -20,17 +20,17 @@ function queueAggregates(rows: {
   module: unknown[];
   operator: unknown[];
 }) {
-  mockDb.execute
-    .mockResolvedValueOnce({ rows: [rows.kpi] })
-    .mockResolvedValueOnce({ rows: rows.trend })
-    .mockResolvedValueOnce({ rows: rows.action })
-    .mockResolvedValueOnce({ rows: rows.module })
-    .mockResolvedValueOnce({ rows: rows.operator });
+  mockDb.all
+    .mockResolvedValueOnce([rows.kpi])
+    .mockResolvedValueOnce(rows.trend)
+    .mockResolvedValueOnce(rows.action)
+    .mockResolvedValueOnce(rows.module)
+    .mockResolvedValueOnce(rows.operator);
 }
 
 describe("getOperationLogAnalytics", () => {
   beforeEach(() => {
-    mockDb.execute.mockReset();
+    mockDb.all.mockReset();
   });
 
   it("聚合返回 KPI、趋势、分布与操作人排行", async () => {
@@ -59,7 +59,7 @@ describe("getOperationLogAnalytics", () => {
   });
 
   it("无数据时返回零值与空数组", async () => {
-    mockDb.execute.mockResolvedValue({ rows: [] });
+    mockDb.all.mockResolvedValue([]);
 
     const result = await getOperationLogAnalytics({
       startDate: "2024-01-01",
@@ -83,9 +83,7 @@ describe("getOperationLogAnalytics", () => {
       operator: [],
     });
     // 第 6 次调用：上一等长窗口的 KPI
-    mockDb.execute.mockResolvedValueOnce({
-      rows: [{ total: 5, operators: 0, high_risk: 0, modules: 1 }],
-    });
+    mockDb.all.mockResolvedValueOnce([{ total: 5, operators: 0, high_risk: 0, modules: 1 }]);
 
     const result = await getOperationLogAnalytics({
       startDate: "2024-01-01",
@@ -115,22 +113,20 @@ describe("getOperationLogAnalytics", () => {
       compare: "none",
     });
 
-    expect(mockDb.execute).toHaveBeenCalledTimes(5);
+    expect(mockDb.all).toHaveBeenCalledTimes(5);
   });
 });
 
 describe("getOperationActionCounts", () => {
   beforeEach(() => {
-    mockDb.execute.mockReset();
+    mockDb.all.mockReset();
   });
 
   it("按指定动作集合聚合次数", async () => {
-    mockDb.execute.mockResolvedValue({
-      rows: [
-        { name: "delete", count: 5 },
-        { name: "reset_pwd", count: 2 },
-      ],
-    });
+    mockDb.all.mockResolvedValue([
+      { name: "delete", count: 5 },
+      { name: "reset_pwd", count: 2 },
+    ]);
 
     const result = await getOperationActionCounts("2024-01-01", "2024-01-31", [
       "delete",
@@ -147,6 +143,6 @@ describe("getOperationActionCounts", () => {
     const result = await getOperationActionCounts("2024-01-01", "2024-01-31", []);
 
     expect(result).toEqual([]);
-    expect(mockDb.execute).not.toHaveBeenCalled();
+    expect(mockDb.all).not.toHaveBeenCalled();
   });
 });

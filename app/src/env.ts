@@ -33,9 +33,6 @@ const DEFAULTS = {
   logLevel: "info",
   port: 3009,
   nodeEnv: "development",
-  dbPoolMax: 10,
-  dbPoolIdleTimeoutMs: 30_000,
-  dbPoolConnectionTimeoutMs: 2_000,
 } as const;
 
 /** 校验失败时的修复提示：环境文件的加载方在部署侧，这里只指路 */
@@ -118,12 +115,6 @@ const resolveNodeEnv = (): string => {
   return raw;
 };
 
-const resolveDbPoolMax = (): number => readCount("DB_POOL_MAX", DEFAULTS.dbPoolMax);
-const resolveDbPoolIdleTimeoutMs = (): number =>
-  readCount("DB_POOL_IDLE_TIMEOUT_MS", DEFAULTS.dbPoolIdleTimeoutMs);
-const resolveDbPoolConnectionTimeoutMs = (): number =>
-  readCount("DB_POOL_CONNECTION_TIMEOUT_MS", DEFAULTS.dbPoolConnectionTimeoutMs);
-
 /** 敏感配置主密钥：支持 32 字节的 Base64 或 64 位十六进制；未设置＝不启用敏感配置加密 */
 const resolveConfigEncryptionKey = (): Buffer | undefined => {
   const raw = readRaw("CONFIG_ENCRYPTION_KEY");
@@ -167,7 +158,7 @@ const resolveBaseDomain = (): string | null => {
 
 /** 运行期配置：字段口径见各自注释，取值按当前 process.env 现读 */
 export type HubEnv = {
-  /** PostgreSQL 连接串（pg.Pool 的 connectionString） */
+  /** SQLite 库文件路径（相对路径按进程 cwd 解析，`:memory:` 为内存库） */
   readonly databaseUrl: string;
   /** JWT 签名密钥（HS256 签名与校验共用） */
   readonly jwtSecret: string;
@@ -181,12 +172,6 @@ export type HubEnv = {
   readonly nodeEnv: string;
   /** 是否生产环境：迁移缺目录即失败、错误脱敏、Cookie Secure 默认值等分流依据 */
   readonly isProduction: boolean;
-  /** pg 连接池最大连接数 */
-  readonly dbPoolMax: number;
-  /** pg 连接空闲回收时间（毫秒） */
-  readonly dbPoolIdleTimeoutMs: number;
-  /** pg 连接获取超时（毫秒） */
-  readonly dbPoolConnectionTimeoutMs: number;
   /** 敏感系统配置主密钥（已解码的 32 字节）；未设置表示不启用加密 */
   readonly configEncryptionKey: Buffer | undefined;
   /** 认证 Cookie 是否带 Secure 标志 */
@@ -218,15 +203,6 @@ export const env: HubEnv = {
   get isProduction() {
     return resolveNodeEnv() === "production";
   },
-  get dbPoolMax() {
-    return resolveDbPoolMax();
-  },
-  get dbPoolIdleTimeoutMs() {
-    return resolveDbPoolIdleTimeoutMs();
-  },
-  get dbPoolConnectionTimeoutMs() {
-    return resolveDbPoolConnectionTimeoutMs();
-  },
   get configEncryptionKey() {
     return resolveConfigEncryptionKey();
   },
@@ -246,9 +222,6 @@ const CHECKS: readonly (() => unknown)[] = [
   resolveLogLevel,
   resolvePort,
   resolveNodeEnv,
-  resolveDbPoolMax,
-  resolveDbPoolIdleTimeoutMs,
-  resolveDbPoolConnectionTimeoutMs,
   resolveConfigEncryptionKey,
   resolveCookieSecure,
   resolveBaseDomain,

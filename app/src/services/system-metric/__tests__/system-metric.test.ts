@@ -3,7 +3,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockDb } = vi.hoisted(() => ({ mockDb: { execute: vi.fn() } }));
+const { mockDb } = vi.hoisted(() => ({ mockDb: { all: vi.fn() } }));
 vi.mock("#/db", () => ({ db: mockDb }));
 
 const { mockCheckHealth } = vi.hoisted(() => ({ mockCheckHealth: vi.fn() }));
@@ -69,12 +69,14 @@ vi.mock("node:perf_hooks", () => ({
 
 import { join, resolve } from "node:path";
 import { toDateString } from "@ucode/hub-lib/date-format";
+import { SQLiteDialect } from "drizzle-orm/sqlite-core";
 import {
   collectDependencies,
   getActiveResourceCount,
   getRequestTotals,
   readEventLoopDelay,
 } from "../system-metric.collect";
+
 import { getDatabaseTotalBytes, getTableSizes } from "../system-metric.db-size.server";
 import { getDatabaseSizes, getStorageUsage } from "../system-metric.inspect.server";
 import {
@@ -140,7 +142,7 @@ beforeEach(() => {
   mockHttp.total.mockReturnValue(1000);
   mockSf.total.mockReturnValue(200);
   mockSf.value.mockReturnValue(4);
-  mockDb.execute.mockResolvedValue({ rows: [] });
+  mockDb.all.mockResolvedValue([]);
 });
 
 describe("system-metric.store", () => {
@@ -211,25 +213,40 @@ describe("system-metric.store", () => {
   });
 });
 
+const dialect = new SQLiteDialect();
+
+/** 按 SQL 文本分派 db.all 的返回值：库总量查两次 PRAGMA，各表查 dbstat */
+const stubDatabaseSize = (
+  opts: { pageCount?: number; pageSize?: number; tables?: unknown[] } = {},
+): void => {
+  const { pageCount = 0, pageSize = 0, tables = [] } = opts;
+  mockDb.all.mockImplementation(async (query: unknown) => {
+    const text = dialect.sqlToQuery(query as never).sql;
+    if (text.includes("page_count")) return pageCount ? [{ page_count: pageCount }] : [];
+    if (text.includes("page_size")) return pageSize ? [{ page_size: pageSize }] : [];
+    return tables;
+  });
+};
+
 describe("system-metric.db-size", () => {
-  it("读取数据库总大小（bigint 字符串转数字）", async () => {
-    mockDb.execute.mockResolvedValue({ rows: [{ size: "2048" }] });
-    expect(await getDatabaseTotalBytes()).toBe(2048);
+  it("读取数据库总大小（页数 × 页大小）", async () => {
+    stubDatabaseSize({ pageCount: 4, pageSize: 4096 });
+    expect(await getDatabaseTotalBytes()).toBe(16384);
   });
 
-  it("数据库查询无结果时返回 0", async () => {
-    mockDb.execute.mockResolvedValue({ rows: [] });
+  it("页数或页大小查不到时返回 0", async () => {
+    stubDatabaseSize({ pageCount: 4 });
     expect(await getDatabaseTotalBytes()).toBe(0);
   });
 
   it("映射各表占用字段", async () => {
-    mockDb.execute.mockResolvedValue({
-      rows: [
+    stubDatabaseSize({
+      tables: [
         {
           table_name: "news",
-          table_bytes: "100",
-          index_bytes: "20",
-          total_bytes: "120",
+          table_bytes: 100,
+          index_bytes: 20,
+          total_bytes: 120,
         },
       ],
     });
@@ -335,16 +352,10 @@ describe("system-metric.inspect", () => {
   });
 
   it("聚合数据库库总量与各表", async () => {
-    // Promise.all 依次触发：库总量查询 → 各表查询
-    mockDb.execute.mockResolvedValueOnce({ rows: [{ size: "4096" }] }).mockResolvedValueOnce({
-      rows: [
-        {
-          table_name: "news",
-          table_bytes: "10",
-          index_bytes: "2",
-          total_bytes: "12",
-        },
-      ],
+    stubDatabaseSize({
+      pageCount: 1,
+      pageSize: 4096,
+      tables: [{ table_name: "news", table_bytes: 10, index_bytes: 2, total_bytes: 12 }],
     });
 
     const sizes = await getDatabaseSizes(true);
@@ -366,7 +377,7 @@ describe("system-metric.server", () => {
   });
 
   it("数据库中无结果时库总量按 0 计", async () => {
-    mockDb.execute.mockResolvedValue({ rows: [] });
+    stubDatabaseSize();
     await sampleSystemMetric();
     const overview = await getSystemOverview();
     expect(overview.lastSample?.dbTotalBytes).toBe(0);

@@ -1,8 +1,8 @@
 /**
- * 通用用户配置表：以 jsonb config 存放用户自己的配置，天然可扩展
+ * 通用用户配置表：以 JSON 文本 config 存放用户自己的配置，天然可扩展
  * 通知渠道在 config.notify_channels 段；未来可增加其它用户配置键
  */
-import { jsonb, pgTable, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { UserType } from "#/types/user";
 import { pk, softDelete, timestamps } from "./columns";
 
@@ -24,19 +24,19 @@ export interface UserNotifyChannels {
   sms?: NotifyChannelConfig;
 }
 
-/** 通用用户配置结构（jsonb） */
+/** 通用用户配置结构（JSON 文本） */
 export interface UserConfig {
   notify_channels?: UserNotifyChannels;
   // 未来其它配置键在此扩展
 }
 
-export const userConfig = pgTable(
+export const userConfig = sqliteTable(
   "user_config",
   {
     ...pk(),
-    userId: uuid("user_id").notNull(),
-    userType: varchar("user_type", { length: 20 }).$type<UserType>().notNull(),
-    config: jsonb("config").$type<UserConfig>().notNull().default({}),
+    userId: text("user_id").notNull(),
+    userType: text("user_type").$type<UserType>().notNull(),
+    config: text("config", { mode: "json" }).$type<UserConfig>().notNull().default({}),
     ...timestamps(),
     ...softDelete(),
   },

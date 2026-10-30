@@ -5,7 +5,7 @@
  * 网页会话调用记本人，`deviceId` 只在设备身份时有值。token 数取自上游返回的 `usage`；
  * 上游不回 usage、或流式中途断开时留空——「没拿到」与「是 0」是两回事，故三列均可空。
  */
-import { index, integer, pgTable, uuid, varchar } from "drizzle-orm/pg-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import type { UserType } from "#/types/user";
 
 import { createdAt, pk } from "./columns";
@@ -13,25 +13,25 @@ import { createdAt, pk } from "./columns";
 /** 调用结果：`ok` 上游正常返回；`error` 上游报错、连接失败或流中断 */
 export type ModelUsageStatus = "ok" | "error";
 
-export const modelUsage = pgTable(
+export const modelUsage = sqliteTable(
   "model_usage",
   {
     ...pk(),
-    accountType: varchar("account_type", { length: 20 }).$type<UserType>().notNull(),
-    accountId: uuid("account_id").notNull(),
+    accountType: text("account_type").$type<UserType>().notNull(),
+    accountId: text("account_id").notNull(),
     /** 设备令牌调用记其设备 id；网页会话调用为 null */
-    deviceId: uuid("device_id"),
-    model: varchar({ length: 120 }).notNull(),
+    deviceId: text("device_id"),
+    model: text("model").notNull(),
     /** 命中厂商 id（`ai_providers` 的对象键） */
-    providerId: varchar("provider_id", { length: 64 }).notNull(),
+    providerId: text("provider_id").notNull(),
     promptTokens: integer("prompt_tokens"),
     completionTokens: integer("completion_tokens"),
     totalTokens: integer("total_tokens"),
     /** 上游调用耗时（毫秒）：非流式为整段响应耗时，流式为整段流时长 */
     latencyMs: integer("latency_ms").notNull(),
-    status: varchar({ length: 20 }).$type<ModelUsageStatus>().notNull(),
+    status: text("status").$type<ModelUsageStatus>().notNull(),
     /** 失败摘要（上游状态码与原错误体节选），成功为 null */
-    errorMessage: varchar("error_message", { length: 500 }),
+    errorMessage: text("error_message"),
     ...createdAt(),
   },
   (table) => [

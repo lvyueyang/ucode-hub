@@ -71,7 +71,7 @@ export interface TrackAnalyticsQuery {
   eventNames?: string[];
   /** 指标：次数 / 独立用户数 */
   metric?: "count" | "users";
-  /** 维度拆解属性 key（properties->>'key'，来自元属性白名单） */
+  /** 维度拆解属性 key（取自事件属性的单个成员，来自元属性白名单） */
   breakdown?: string;
   /** 周期对比：无 / 环比 / 同比 */
   compare?: "none" | "previous" | "year";

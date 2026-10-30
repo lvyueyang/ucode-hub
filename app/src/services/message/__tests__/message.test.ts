@@ -226,7 +226,7 @@ describe("markAsRead", () => {
   it("标记为已读成功", async () => {
     mockDb.update.mockReturnValue({
       set: vi.fn(() => ({
-        where: vi.fn().mockResolvedValue({ rowCount: 1 }),
+        where: vi.fn().mockResolvedValue({ changes: 1 }),
       })),
     });
 
@@ -237,7 +237,7 @@ describe("markAsRead", () => {
   it("消息不存在返回 false", async () => {
     mockDb.update.mockReturnValue({
       set: vi.fn(() => ({
-        where: vi.fn().mockResolvedValue({ rowCount: 0 }),
+        where: vi.fn().mockResolvedValue({ changes: 0 }),
       })),
     });
 
@@ -250,7 +250,7 @@ describe("markAllRead", () => {
   it("全部标记为已读", async () => {
     mockDb.update.mockReturnValue({
       set: vi.fn(() => ({
-        where: vi.fn().mockResolvedValue({ rowCount: 3 }),
+        where: vi.fn().mockResolvedValue({ changes: 3 }),
       })),
     });
 
@@ -263,7 +263,7 @@ describe("deleteMessage", () => {
   it("软删除成功", async () => {
     mockDb.update.mockReturnValue({
       set: vi.fn(() => ({
-        where: vi.fn().mockResolvedValue({ rowCount: 1 }),
+        where: vi.fn().mockResolvedValue({ changes: 1 }),
       })),
     });
 
@@ -274,7 +274,7 @@ describe("deleteMessage", () => {
   it("消息不存在返回 false", async () => {
     mockDb.update.mockReturnValue({
       set: vi.fn(() => ({
-        where: vi.fn().mockResolvedValue({ rowCount: 0 }),
+        where: vi.fn().mockResolvedValue({ changes: 0 }),
       })),
     });
 
@@ -337,7 +337,7 @@ describe("listMessages", () => {
 describe("sendMessages", () => {
   it("批量发送成功返回条数", async () => {
     mockDb.insert.mockReturnValue({
-      values: vi.fn().mockResolvedValue({ rowCount: 2 }),
+      values: vi.fn().mockResolvedValue({ changes: 2 }),
     });
 
     const count = await sendMessages({
@@ -349,9 +349,10 @@ describe("sendMessages", () => {
     expect(count).toBe(2);
   });
 
-  it("未返回 rowCount 时按输入数量兜底", async () => {
+  it("发送条数以驱动返回的 changes 为准（不再按输入数量兜底）", async () => {
+    // node:sqlite 的 changes 是 number | bigint，返回值统一归一成 number
     mockDb.insert.mockReturnValue({
-      values: vi.fn().mockResolvedValue({ rowCount: null }),
+      values: vi.fn().mockResolvedValue({ changes: 3n }),
     });
 
     const count = await sendMessages({
@@ -360,7 +361,7 @@ describe("sendMessages", () => {
       title: "通知",
     });
 
-    expect(count).toBe(1);
+    expect(count).toBe(3);
   });
 });
 
@@ -368,7 +369,7 @@ describe("deleteMessageById", () => {
   it("强制软删除成功", async () => {
     mockDb.update.mockReturnValue({
       set: vi.fn(() => ({
-        where: vi.fn().mockResolvedValue({ rowCount: 1 }),
+        where: vi.fn().mockResolvedValue({ changes: 1 }),
       })),
     });
 
@@ -379,7 +380,7 @@ describe("deleteMessageById", () => {
   it("消息不存在返回 false", async () => {
     mockDb.update.mockReturnValue({
       set: vi.fn(() => ({
-        where: vi.fn().mockResolvedValue({ rowCount: 0 }),
+        where: vi.fn().mockResolvedValue({ changes: 0 }),
       })),
     });
 

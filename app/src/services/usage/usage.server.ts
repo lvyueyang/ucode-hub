@@ -8,7 +8,7 @@
  * 汇总与列表必须共用同一套筛选条件（`buildUsageWhere`），否则页头卡片与下方列表会各说各话。
  */
 import { toDayRange } from "@ucode/hub-lib/date-format";
-import { and, eq, gte, ilike, inArray, lt, type SQL, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, like, lt, type SQL, sql } from "drizzle-orm";
 
 import { db } from "#/db";
 import { adminUser, clientUser, device, type ModelUsageStatus, modelUsage } from "#/db/schema";
@@ -17,7 +17,6 @@ import {
   DEFAULT_PAGE,
   DEFAULT_PAGE_SIZE,
   executePaginatedQuery,
-  extractRows,
   paginationOffset,
 } from "#/shared-services/query/query-utils.server";
 import type { PaginatedResult, SortOrder } from "#/types/query";
@@ -125,7 +124,7 @@ const buildUsageWhere = (filter: UsageFilter): SQL | undefined => {
   if (filter.accountType) conditions.push(eq(modelUsage.accountType, filter.accountType));
   if (filter.accountId) conditions.push(eq(modelUsage.accountId, filter.accountId));
   if (filter.deviceId) conditions.push(eq(modelUsage.deviceId, filter.deviceId));
-  if (filter.model) conditions.push(ilike(modelUsage.model, `%${filter.model}%`));
+  if (filter.model) conditions.push(like(modelUsage.model, `%${filter.model}%`));
   if (filter.status) conditions.push(eq(modelUsage.status, filter.status));
   if (filter.startDate) {
     conditions.push(gte(modelUsage.createdAt, toDayRange(filter.startDate).start));
@@ -211,27 +210,29 @@ export const listUsageForAdmin = async (
 /**
  * 汇总一行：token 与耗时交给库侧聚合，不把明细拉进内存。
  * 聚合走原生 SQL（与埋点 / 操作日志分析同口径）：标准 query builder 表达不了
- * `COUNT(*) FILTER (...)` 与多列一次算完；求和列为 bigint、平均为 numeric，驱动都回字符串，统一在此转数字。
+ * `COUNT(*) FILTER (...)` 与多列一次算完；SQLite 为动态类型，计数 / 求和 / 平均
+ * 都直接回 number，仍统一经 Number 收口以兼容任意驱动回字符串的情形。
  */
 const sumUsage = async (where: SQL | undefined): Promise<UsageTotals> => {
   const filter = where ? sql` WHERE ${where}` : sql``;
-  const result = await db.execute(sql`
-		SELECT COUNT(*)::int AS requests,
-		       COUNT(*) FILTER (WHERE ${modelUsage.status} = 'error')::int AS error_requests,
-		       COALESCE(SUM(${modelUsage.promptTokens}), 0)::bigint AS prompt_tokens,
-		       COALESCE(SUM(${modelUsage.completionTokens}), 0)::bigint AS completion_tokens,
-		       COALESCE(SUM(${modelUsage.totalTokens}), 0)::bigint AS total_tokens,
-		       COALESCE(AVG(${modelUsage.latencyMs}), 0)::float8 AS avg_latency_ms
+  const row = (
+    await db.all<{
+      requests: number;
+      error_requests: number;
+      prompt_tokens: number;
+      completion_tokens: number;
+      total_tokens: number;
+      avg_latency_ms: number;
+    }>(sql`
+		SELECT COUNT(*) AS requests,
+		       COUNT(*) FILTER (WHERE ${modelUsage.status} = 'error') AS error_requests,
+		       COALESCE(SUM(${modelUsage.promptTokens}), 0) AS prompt_tokens,
+		       COALESCE(SUM(${modelUsage.completionTokens}), 0) AS completion_tokens,
+		       COALESCE(SUM(${modelUsage.totalTokens}), 0) AS total_tokens,
+		       COALESCE(AVG(${modelUsage.latencyMs}), 0) AS avg_latency_ms
 		  FROM ${modelUsage}${filter}
-	`);
-  const row = extractRows<{
-    requests: number;
-    error_requests: number;
-    prompt_tokens: string;
-    completion_tokens: string;
-    total_tokens: string;
-    avg_latency_ms: string | number;
-  }>(result)[0];
+	`)
+  )[0];
 
   return {
     requests: Number(row?.requests ?? 0),

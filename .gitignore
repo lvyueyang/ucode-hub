@@ -15,6 +15,8 @@ __unconfig*
 todos.json
 .tmp
 .data
+# SQLite 数据库文件（DATABASE_URL 的默认落点）
+data/
 .volumes
 *.log
 coverage

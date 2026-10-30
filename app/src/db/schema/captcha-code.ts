@@ -1,18 +1,20 @@
 /**
  * 验证码表
  */
-import { boolean, index, pgTable, timestamp, varchar } from "drizzle-orm/pg-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { createdAt, pk } from "./columns";
 
-export const captchaCode = pgTable(
+export const captchaCode = sqliteTable(
   "captcha_code",
   {
     ...pk(),
-    type: varchar({ length: 20 }).notNull(), // email | sms
-    target: varchar({ length: 255 }).notNull(), // 邮箱或手机号
-    code: varchar({ length: 10 }).notNull(),
-    used: boolean().default(false).notNull(),
-    expiredAt: timestamp("expired_at", { withTimezone: true }).notNull(),
+    type: text("type").notNull(), // email | sms
+    target: text("target").notNull(), // 邮箱或手机号
+    code: text("code").notNull(),
+    used: integer("used", { mode: "boolean" }).default(false).notNull(),
+    /** 该码的校验失败次数：达到阈值即作废，避免短码被无限次尝试 */
+    attempts: integer("attempts").default(0).notNull(),
+    expiredAt: integer("expired_at", { mode: "timestamp_ms" }).notNull(),
     // 验证码仅需创建时间，不套用 timestamps()
     ...createdAt(),
   },

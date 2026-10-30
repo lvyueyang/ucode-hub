@@ -7,7 +7,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 
-import { and, desc, eq, ilike, inArray, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, like, type SQL } from "drizzle-orm";
 
 import { db } from "#/db";
 import { adminUser, clientUser, type DeviceStatus, device } from "#/db/schema";
@@ -139,7 +139,7 @@ export const listDevicesForAdmin = async (
   const pageSize = params.pageSize ?? DEFAULT_PAGE_SIZE;
 
   const conditions: SQL[] = [notDeleted(device.deletedAt)];
-  if (params.keyword) conditions.push(ilike(device.name, `%${params.keyword}%`));
+  if (params.keyword) conditions.push(like(device.name, `%${params.keyword}%`));
   if (params.status) conditions.push(eq(device.status, params.status));
   if (params.ownerType) conditions.push(eq(device.ownerType, params.ownerType));
   const where = and(...conditions);

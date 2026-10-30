@@ -1,15 +1,15 @@
 /**
  * 管理端角色表
  */
-import { jsonb, pgTable, text, varchar } from "drizzle-orm/pg-core";
+import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { pk, softDelete, timestamps } from "./columns";
 
-export const adminRole = pgTable("admin_role", {
+export const adminRole = sqliteTable("admin_role", {
   ...pk(),
-  name: varchar({ length: 50 }).unique().notNull(),
-  slug: varchar({ length: 50 }).unique().notNull(),
-  permissions: jsonb().$type<string[]>().default([]).notNull(),
-  description: text(),
+  name: text("name").unique().notNull(),
+  slug: text("slug").unique().notNull(),
+  permissions: text("permissions", { mode: "json" }).$type<string[]>().default([]).notNull(),
+  description: text("description"),
   ...timestamps(),
   ...softDelete(),
 });

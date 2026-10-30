@@ -3,7 +3,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import dayjs from "dayjs";
-import { and, eq, ilike, lt, not, or, sql } from "drizzle-orm";
+import { and, eq, like, lt, not, or, sql } from "drizzle-orm";
 import { db } from "#/db/index";
 import { file } from "#/db/schema";
 import { logger } from "#/shared-services/logger";
@@ -117,24 +117,21 @@ export async function getFileList(
   if (keyword) {
     const pattern = `%${keyword}%`;
     // uuid 列与文本比较需显式转型，否则 PG 不会做隐式转换
-    const keywordCondition = or(
-      ilike(file.originalName, pattern),
-      sql`${file.id}::text ILIKE ${pattern}`,
-    );
+    const keywordCondition = or(like(file.originalName, pattern), like(file.id, pattern));
     if (keywordCondition) conditions.push(keywordCondition);
   }
-  // 标签搜索：tags 为数组列，展开元素后做包含匹配（未打标签的文件自然不命中）
+  // 标签搜索：tags 以 JSON 数组文本存储，用 json_each 展开元素后做包含匹配（未打标签的文件自然不命中）
   if (tag) {
     const pattern = `%${tag}%`;
     conditions.push(
-      sql`EXISTS (SELECT 1 FROM unnest(${file.tags}) AS tag WHERE tag ILIKE ${pattern})`,
+      sql`EXISTS (SELECT 1 FROM json_each(${file.tags}) AS tag WHERE tag.value LIKE ${pattern})`,
     );
   }
 
-  if (mimePrefix) conditions.push(ilike(file.mimeType, `${mimePrefix}%`));
+  if (mimePrefix) conditions.push(like(file.mimeType, `${mimePrefix}%`));
   // 排除指定 mime 前缀（如附件媒体库排除图片/视频/音频）
   for (const prefix of excludeMimePrefixes ?? []) {
-    conditions.push(not(ilike(file.mimeType, `${prefix}%`)));
+    conditions.push(not(like(file.mimeType, `${prefix}%`)));
   }
 
   const sortOrderClause = buildSortClause(
