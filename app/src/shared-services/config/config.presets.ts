@@ -193,12 +193,12 @@ export const PRESET_CONFIGS: PresetConfig[] = [
     groupName: "短信设置",
   },
   {
-    key: "custom_head_config",
-    value: "{}",
+    key: "client_register_enabled",
+    value: "false",
     description:
-      "自定义 head 配置（JSON，结构同 TanStack head()：{ meta, links, scripts, styles }，如百度统计、JSON-LD），全局生效于前台 SSR 页面。注意：该配置由管理员填写并原样注入页面，拥有配置编辑权限即等价于可执行公共站点任意脚本",
+      "是否开放客前台自助注册：关闭后注册接口与注册页一并不可用（已存在的账号不受影响）。单机 / 私人部署建议保持关闭",
     clientVisible: true,
-    valueType: "json",
+    valueType: "boolean",
     groupName: "站点设置",
   },
   {

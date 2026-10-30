@@ -187,26 +187,6 @@ describe("ensurePresetConfigs", () => {
     expect(mockDb.update).toHaveBeenCalled();
     expect(mockDb.insert).not.toHaveBeenCalled();
   });
-
-  it("预置配置包含 custom_head_config（客户端可见，json 类型）", async () => {
-    vi.clearAllMocks();
-    mockRows.mockResolvedValue([]);
-    const insertedValues: Array<{
-      key: string;
-      clientVisible?: boolean;
-      valueType?: string;
-    }> = [];
-    const valuesMock = vi.fn((v: { key: string; clientVisible?: boolean; valueType?: string }) => {
-      insertedValues.push(v);
-      return { returning: vi.fn() };
-    });
-    mockDb.insert.mockReturnValue({ values: valuesMock } as any);
-    await ensurePresetConfigs();
-    const preset = insertedValues.find((v) => v.key === "custom_head_config");
-    expect(preset).toBeDefined();
-    expect(preset?.clientVisible).toBe(true);
-    expect(preset?.valueType).toBe("json");
-  });
 });
 describe("getConfig", () => {
   it("从缓存获取配置值", async () => {
