@@ -11,8 +11,6 @@
     "test": "pnpm --filter @ucode/hub test",
     "check": "biome check . && pnpm -r typecheck && pnpm -r test",
     "spike": "pnpm --filter @ucode/hub spike",
-    "db:up": "docker compose -f docker-compose.dev.yml up -d --wait",
-    "db:down": "docker compose -f docker-compose.dev.yml down",
     "e2e": "pnpm --filter @ucode/hub e2e",
     "db:generate": "pnpm --filter @ucode/hub db:generate",
     "db:migrate": "pnpm --filter @ucode/hub db:migrate",
