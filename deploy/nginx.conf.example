@@ -1,10 +1,14 @@
 # hub 的反代样例（宿主机 nginx）
 #
+# 本文件是 conf.d 风格的片段（被 nginx 的 http {} 块 include），因此可以在顶层声明 limit_req_zone。
+#
 # 为什么需要它：hub 自己只监听 127.0.0.1（见 deploy/docker-compose.yml），公网入口由宿主机反代终止 TLS。
-# 三条硬要求，少一条就会出问题：
+# 五条硬要求，少一条就会出问题：
 #   1. `proxy_buffering off`：事件流是长连接，缓冲会让首帧等到缓冲区满才出去；
 #   2. 长读超时：隧道与事件流都长时间没有数据帧，"读超时"过短会把连接切断；
-#   3. WS 升级透传：hub 的隧道端点是 WebSocket（`/api/v1/tunnel`），缺了 Upgrade 头就升级不了。
+#   3. WS 升级透传：hub 的隧道端点是 WebSocket（`/api/v1/tunnel`），缺了 Upgrade 头就升级不了；
+#   4. 入口限速：应用内限流只覆盖登录接口，挡不住打满连接池的无状态请求，反代层必须再兜一层；
+#   5. 安全响应头：HSTS / 禁被嵌套 / nosniff；CSP 见文末（与内联主题脚本冲突，需按站点定制）。
 #
 # 域名规划：
 #   - 主域（如 hub.example.com）：控制面（后台、设备接口、隧道端点）；
@@ -16,6 +20,13 @@ map $http_upgrade $connection_upgrade {
     default upgrade;
     ''      close;
 }
+
+# 限速档位（按来源 IP 令牌桶）：登录接口最严，隧道握手次之，页面与静态走宽档
+limit_req_zone $binary_remote_addr zone=hub_login:10m   rate=10r/m;
+limit_req_zone $binary_remote_addr zone=hub_tunnel:10m  rate=30r/m;
+limit_req_zone $binary_remote_addr zone=hub_pages:10m   rate=50r/s;
+limit_req_zone $binary_remote_addr zone=hub_ingress:10m rate=120r/s;
+limit_req_status 429;
 
 # ── 主域：控制面 + 隧道端点 ──────────────────────────────────────────────
 server {
@@ -36,10 +47,56 @@ server {
     ssl_certificate     /etc/letsencrypt/live/hub.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/hub.example.com/privkey.pem;
 
+    # TLS 下限：1.2 起，只留 AEAD 套件；会话票据关闭，减少长期密钥被解出的价值
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
     # 后台与设备接口都是 JSON，体积小；但隧道与事件流是长连接，不能设小超时
     client_max_body_size 32m;
 
+    # 登录：应用内按「用户名」限流，这里按 IP 再收一道，脚本连打即 429
+    location = /api/v1/auth/login {
+        limit_req zone=hub_login burst=5 nodelay;
+
+        proxy_pass http://127.0.0.1:3009;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 隧道握手：这里同时是长连接入口，别把 burst 设太小（重连风暴会撞上限）
+    location = /api/v1/tunnel {
+        limit_req zone=hub_tunnel burst=10 nodelay;
+
+        proxy_pass http://127.0.0.1:3009;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
+
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    # 其余：SSR 页面、Server Function、事件流与静态资源
     location / {
+        limit_req zone=hub_pages burst=100 nodelay;
+
         proxy_pass http://127.0.0.1:3009;
         proxy_http_version 1.1;
         proxy_set_header Host              $host;
@@ -65,10 +122,23 @@ server {
     ssl_certificate     /etc/letsencrypt/live/hub.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/hub.example.com/privkey.pem;
 
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
     # 附件上传走隧道回灌到 UCode，体积上限按产品口径给（UCode 自身另有 32MB 附件上限）
     client_max_body_size 256m;
 
     location / {
+        limit_req zone=hub_ingress burst=200 nodelay;
+
         proxy_pass http://127.0.0.1:3009;
         proxy_http_version 1.1;
         # Host 必须原样透传：hub 靠子域认设备，改写 Host 会让 ingress 找不到设备
@@ -83,6 +153,25 @@ server {
         proxy_send_timeout 1h;
     }
 }
+
+# ── 控制面来源收敛（单机 / 私人部署强烈建议）──────────────────────────────
+#
+# 「只在私网里用」不等于「关在门外」：控制面（后台登录）没有任何对外暴露的必要。
+# 三选一，按你的网络形态挑：
+#   1. 反代层白名单（最省事）：在主域 server 块里给后台与登录加
+#        location /admin   { allow 203.0.113.0/24; deny all; proxy_pass ...; }
+#        location = /api/v1/auth/login { allow 203.0.113.0/24; deny all; proxy_pass ...; }
+#      （记得把上面的 proxy_* 头一并复制过去；写在 / 之后 nginx 会按最长前缀优先匹配）
+#      不需要对外暴露的内部接口也一并收窄，例如 /health 与 /api/metrics（它们本身不鉴权）。
+#   2. 走 WireGuard / Tailscale 之类私有网络，控制面只监听内网地址；
+#   3. 套 Cloudflare Access 一类零信任网关，登录前置一层身份校验。
+# 泛子域（设备回灌）一般不收敛，否则设备页面在外面打不开。
+
+# ── CSP（默认不启用，按站点定制）────────────────────────────────────────
+#
+# hub 的 Document 会内联主题初始化脚本与 layer 样式，直接上严格 CSP 会把它们拦掉。
+# 想启用时先观察不阻断：add_header Content-Security-Policy-Report-Only "default-src 'self'; ..." always;
+# 确认只报不拦、且收敛到可用策略（给内联脚本加 nonce 或 hash）之后，再改成强制策略。
 
 # ── 泛域名证书（DNS-01，示例）────────────────────────────────────────────
 #
