@@ -30,14 +30,15 @@ export type CallerDevice = {
 
 /** 账号校验结果：id 取服务层返回的权威值，不用令牌里的自述 */
 export type CallerAccount =
-  | { success: true; id: string }
+  | { success: true; id: string; tokenVersion: number }
   | { success: false; reason: "not_found" | "disabled" };
 
 /** 鉴权依赖：路由注入真实实现，测试传替身 */
 export type ModelEndpointAuthDeps = {
   /** 按明文令牌反查设备（服务层已过滤软删） */
   findDeviceByToken: (token: string) => Promise<CallerDevice | null>;
-  verifyJwt: (token: string) => Promise<{ userId: string; userType: UserType } | null>;
+  /** 验签并解出身份：除 id / 类型外还要拿令牌版本，用于判断会话是否已被撤销 */
+  verifyJwt: (token: string) => Promise<{ userId: string; userType: UserType; v: number } | null>;
   /** 账号仍存在且未停用才放行：令牌没过期也不该给已删 / 已停用的账号记账 */
   getAdminUserForAuth: (userId: string) => Promise<CallerAccount>;
   getClientUserForAuth: (userId: string) => Promise<CallerAccount>;
@@ -72,6 +73,8 @@ const resolveUserCaller = async (
       ? await deps.getAdminUserForAuth(payload.userId)
       : await deps.getClientUserForAuth(payload.userId);
   if (!found.success) return null;
+  // 令牌版本不一致：该会话已被改密 / 被重置 / 登出撤销，与 Cookie 会话、/api/v1/* 同一口径
+  if (found.tokenVersion !== payload.v) return null;
   return {
     accountType: payload.userType,
     accountId: found.id,

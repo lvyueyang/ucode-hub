@@ -59,6 +59,7 @@ describe("resolveClientAuthContext", () => {
       userId: "admin-1",
       username: "admin",
       userType: "admin",
+      v: 0,
     });
     await expect(resolveClientAuthContext("admin-token")).rejects.toMatchObject({
       statusCode: 401,
@@ -71,6 +72,7 @@ describe("resolveClientAuthContext", () => {
       userId: "ghost",
       username: "ghost",
       userType: "client",
+      v: 0,
     });
     mockGetClientUserForAuth.mockResolvedValue({
       success: false,
@@ -86,6 +88,7 @@ describe("resolveClientAuthContext", () => {
       userId: "disabled-1",
       username: "disabled",
       userType: "client",
+      v: 0,
     });
     mockGetClientUserForAuth.mockResolvedValue({
       success: false,
@@ -101,12 +104,14 @@ describe("resolveClientAuthContext", () => {
       userId: "client-1",
       username: "user",
       userType: "client",
+      v: 0,
     });
     mockGetClientUserForAuth.mockResolvedValue({
       success: true,
       id: "client-1",
       username: "user",
       email: "user@example.com",
+      tokenVersion: 0,
       rolePermissions: ["demo:view"],
     });
 
@@ -115,6 +120,29 @@ describe("resolveClientAuthContext", () => {
       username: "user",
       email: "user@example.com",
       rolePermissions: ["demo:view"],
+    });
+  });
+
+  it("载荷令牌版本落后于当前版本时抛 401（会话已被撤销）", async () => {
+    mockVerifyToken.mockResolvedValue({
+      userId: "client-1",
+      username: "user",
+      userType: "client",
+      v: 0,
+    });
+    // 改密 / 被重置 / 登出后库内版本已自增，旧令牌不得放行
+    mockGetClientUserForAuth.mockResolvedValue({
+      success: true,
+      id: "client-1",
+      username: "user",
+      email: "user@example.com",
+      tokenVersion: 2,
+      rolePermissions: [],
+    });
+
+    await expect(resolveClientAuthContext("stale")).rejects.toMatchObject({
+      statusCode: 401,
+      message: "登录已失效，请重新登录",
     });
   });
 });

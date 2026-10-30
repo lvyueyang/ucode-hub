@@ -8,9 +8,10 @@ import { AutofillBlocker } from "@ucode/hub-ui-ssr/form";
 import { Button, Card, CardContent, CardHeader, CardTitle, Input } from "@ucode/hub-ui-ssr/ui";
 import { toast } from "sonner";
 import { useClientAuth } from "#/components/client";
-import { useTranslation } from "#/components/providers";
+import { useGlobalStore, useTranslation } from "#/components/providers";
 import { getCurrentClientSFn } from "#/services/client-auth/client-auth.functions";
 import { track } from "#/services/track/track";
+import { toBool } from "#/utils/bool";
 import { getDisplayErrorMessage } from "#/utils/error-utils";
 import { sfnUnwrap } from "#/utils/sfn-error";
 import { clientLoginSFn } from "./-mods/login.functions";
@@ -41,6 +42,9 @@ function ClientLoginPage() {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { refetch } = useClientAuth();
+  const { systemConfig } = useGlobalStore();
+  // 注册入口跟随站点开关：关闭时整条提示不渲染，登录页本身不受影响
+  const isRegisterEnabled = toBool(systemConfig.client_register_enabled);
 
   const form = useForm({
     defaultValues: {
@@ -155,12 +159,14 @@ function ClientLoginPage() {
               </Link>
             </p>
 
-            <p className="mt-1 text-center text-sm text-muted-foreground">
-              {t("还没有账号？")}{" "}
-              <Link to="/register" className="underline underline-offset-4 hover:text-foreground">
-                {t("立即注册")}
-              </Link>
-            </p>
+            {isRegisterEnabled && (
+              <p className="mt-1 text-center text-sm text-muted-foreground">
+                {t("还没有账号？")}{" "}
+                <Link to="/register" className="underline underline-offset-4 hover:text-foreground">
+                  {t("立即注册")}
+                </Link>
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>

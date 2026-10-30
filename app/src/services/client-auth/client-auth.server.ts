@@ -3,7 +3,7 @@
  */
 
 import bcrypt from "bcryptjs";
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "#/db/index";
 import { clientRole, clientUser } from "#/db/schema";
 import { verifyCaptcha } from "#/services/captcha/captcha.server";
@@ -13,7 +13,13 @@ import type {
   ClientUser,
 } from "#/services/client-auth/client-auth.types";
 import { type CachedClientUser, clientUserCache } from "#/services/client-auth/client-user.cache";
+import {
+  clearLoginFailures,
+  loginLockRemainingMs,
+  recordLoginFailure,
+} from "#/services/login-throttle/login-throttle.server";
 import { trackServerEvent } from "#/services/track/track.server";
+import { getConfig } from "#/shared-services/config/config.server";
 import { type JwtPayload, jwt } from "#/shared-services/jwt";
 import { logger } from "#/shared-services/logger";
 import { logOperation } from "#/shared-services/operation-log/operation-log.server";
@@ -29,10 +35,21 @@ async function getClientRolePermissions(clientRoleIds: string[]): Promise<string
 }
 
 /**
+ * 用户名不存在时也跑一次 bcrypt：否则响应时间差就是用户名枚举的口子（此散列仅用于计时）
+ */
+const TIMING_DUMMY_PASSWORD_HASH = "$2b$12$TADxti.gzlHmApX1T3XC3O9No2ik8oHPrSJuJ6kJmEl0OcXBUTi9K";
+
+/**
  * 客户端用户登录逻辑：验证用户名密码，签发 JWT
  * 调用方（路由 SF）负责设置 Cookie
  */
 export async function clientLogin(username: string, password: string): Promise<ClientLoginResult> {
+  // 失败次数按账号累计（进程内存），锁定期间直接快速失败
+  const throttleKey = `client:${username}`;
+  if (loginLockRemainingMs(throttleKey) > 0) {
+    return { success: false, message: "尝试过于频繁，请稍后再试" };
+  }
+
   const [user] = await db
     .select()
     .from(clientUser)
@@ -40,13 +57,19 @@ export async function clientLogin(username: string, password: string): Promise<C
     .limit(1);
 
   if (!user || user.deletedAt || user.status !== "active") {
+    await bcrypt.compare(password, TIMING_DUMMY_PASSWORD_HASH);
+    recordLoginFailure(throttleKey);
     return { success: false, message: "用户名或密码错误" };
   }
 
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
+    const lockMs = recordLoginFailure(throttleKey);
+    if (lockMs > 0) logger.warn({ username, lockMs }, "客户端登录失败次数超阈值，已临时锁定");
     return { success: false, message: "用户名或密码错误" };
   }
+
+  clearLoginFailures(throttleKey);
 
   await db.update(clientUser).set({ lastLoginAt: new Date() }).where(eq(clientUser.id, user.id));
 
@@ -54,6 +77,7 @@ export async function clientLogin(username: string, password: string): Promise<C
     userId: user.id,
     username: user.username,
     userType: "client",
+    v: user.tokenVersion,
   };
   const token = await jwt.signToken(payload);
 
@@ -74,6 +98,11 @@ export async function clientRegister(
   password: string,
   captcha: string,
 ): Promise<ClientRegisterResult> {
+  // 自助注册默认关闭：私人部署里「谁能注册」等于「谁能进前台」，开与不开要是一个显式决定
+  if ((await getConfig("client_register_enabled")) !== "true") {
+    return { success: false, message: "注册已关闭" };
+  }
+
   const captchaValid = await verifyCaptcha("email", email, captcha);
   if (!captchaValid) {
     return { success: false, message: "验证码错误或已过期" };
@@ -89,7 +118,8 @@ export async function clientRegister(
     return { success: false, message: "用户名或邮箱已存在" };
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
+  // 与其它口令写入点统一 cost 12
+  const passwordHash = await bcrypt.hash(password, 12);
   // 新注册用户分配默认普通用户角色（normal-user）
   const [normalRole] = await db
     .select()
@@ -146,9 +176,9 @@ export async function getCurrentClient(token: string | undefined): Promise<Clien
   const jwtPayload = await jwt.verifyToken(token);
   if (jwtPayload?.userType !== "client") return null;
 
-  // 查缓存（缓存中存有 status，读取时校验是否仍为 active）
+  // 查缓存（缓存中存有 status 与令牌版本，读取时校验会话是否仍有效）
   const cached = clientUserCache.get(jwtPayload.userId);
-  if (cached && cached.status === "active") {
+  if (cached && cached.status === "active" && cached.tokenVersion === jwtPayload.v) {
     return {
       id: cached.id,
       username: cached.username,
@@ -165,6 +195,8 @@ export async function getCurrentClient(token: string | undefined): Promise<Clien
     .where(and(eq(clientUser.id, jwtPayload.userId), isNull(clientUser.deletedAt)))
     .limit(1);
   if (!user || user.deletedAt || user.status !== "active") return null;
+  // 令牌版本不一致：该会话已被撤销（改密 / 被重置 / 登出）
+  if (user.tokenVersion !== jwtPayload.v) return null;
 
   const cacheEntry: CachedClientUser = {
     id: user.id,
@@ -172,6 +204,7 @@ export async function getCurrentClient(token: string | undefined): Promise<Clien
     email: user.email,
     avatar: user.avatar,
     clientRoleIds: user.clientRoleIds,
+    tokenVersion: user.tokenVersion,
     status: user.status,
   };
   clientUserCache.set(jwtPayload.userId, cacheEntry);
@@ -196,6 +229,7 @@ export async function getClientUserForAuth(userId: string): Promise<
       id: string;
       username: string;
       email: string;
+      tokenVersion: number;
       rolePermissions: string[];
     }
   | { success: false; reason: "not_found" | "disabled" }
@@ -211,6 +245,7 @@ export async function getClientUserForAuth(userId: string): Promise<
       id: cached.id,
       username: cached.username,
       email: cached.email,
+      tokenVersion: cached.tokenVersion,
       rolePermissions: permissions,
     };
   }
@@ -228,6 +263,7 @@ export async function getClientUserForAuth(userId: string): Promise<
     email: user.email,
     avatar: user.avatar,
     clientRoleIds: user.clientRoleIds,
+    tokenVersion: user.tokenVersion,
     status: user.status,
   };
   clientUserCache.set(userId, cacheEntry);
@@ -240,6 +276,7 @@ export async function getClientUserForAuth(userId: string): Promise<
     id: user.id,
     username: user.username,
     email: user.email,
+    tokenVersion: user.tokenVersion,
     rolePermissions,
   };
 }
@@ -247,4 +284,13 @@ export async function getClientUserForAuth(userId: string): Promise<
 /** 清除客户端用户缓存（用户信息/状态变更时调用） */
 export function clearClientUserCache(userId: string): void {
   clientUserCache.delete(userId);
+}
+
+/** 自增令牌版本：使该账号已签发的全部令牌立即失效（改密 / 被重置 / 登出） */
+export async function bumpClientTokenVersion(userId: string): Promise<void> {
+  await db
+    .update(clientUser)
+    .set({ tokenVersion: sql`${clientUser.tokenVersion} + 1` })
+    .where(eq(clientUser.id, userId));
+  clearClientUserCache(userId);
 }

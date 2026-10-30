@@ -14,13 +14,18 @@ export const jwtPayloadSchema = z.object({
   username: z.string().min(1),
   /** admin 或 client */
   userType: z.enum(["admin", "client"]),
+  /** 令牌版本：与用户表的 token_version 比对，改密 / 被重置 / 登出时自增即作废旧令牌 */
+  v: z.number().int().min(0),
 });
 
 /** JWT 载荷 */
 export type JwtPayload = z.infer<typeof jwtPayloadSchema>;
 
-/** Access Token 有效期：7 天 */
-const ACCESS_TOKEN_EXPIRES = "7d";
+/**
+ * Access Token 有效期：24 小时。
+ * 撤销靠载荷里的令牌版本（改密 / 被重置 / 登出即自增），有效期只是兜底上限。
+ */
+const ACCESS_TOKEN_EXPIRES = "24h";
 
 /** JWT 签发/校验模块 */
 export interface JwtModule {

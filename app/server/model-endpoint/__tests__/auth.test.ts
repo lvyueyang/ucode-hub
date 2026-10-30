@@ -86,9 +86,13 @@ describe("resolveModelEndpointCaller", () => {
   });
 
   it("JWT 形态的令牌不走设备查询，按用户身份解析", async () => {
-    const found: CallerAccount = { success: true, id: "33333333-3333-3333-3333-333333333333" };
+    const found: CallerAccount = {
+      success: true,
+      id: "33333333-3333-3333-3333-333333333333",
+      tokenVersion: 0,
+    };
     const deps = createDeps({
-      verifyJwt: vi.fn(async () => ({ userId: "self-claimed", userType: "admin" as const })),
+      verifyJwt: vi.fn(async () => ({ userId: "self-claimed", userType: "admin" as const, v: 0 })),
       getAdminUserForAuth: vi.fn(async () => found),
     });
 
@@ -106,8 +110,10 @@ describe("resolveModelEndpointCaller", () => {
 
   it("客户端用户解析走客户端用户表校验", async () => {
     const deps = createDeps({
-      verifyJwt: vi.fn(async () => ({ userId: "u1", userType: "client" as const })),
-      getClientUserForAuth: vi.fn(async () => ({ success: true, id: "u1" }) as const),
+      verifyJwt: vi.fn(async () => ({ userId: "u1", userType: "client" as const, v: 0 })),
+      getClientUserForAuth: vi.fn(
+        async () => ({ success: true, id: "u1", tokenVersion: 0 }) as const,
+      ),
     });
 
     const caller = await resolveModelEndpointCaller(`Bearer ${jwtToken}`, deps);
@@ -120,9 +126,21 @@ describe("resolveModelEndpointCaller", () => {
     expect(await resolveModelEndpointCaller(`Bearer ${jwtToken}`, invalid)).toBeNull();
 
     const disabled = createDeps({
-      verifyJwt: vi.fn(async () => ({ userId: "u1", userType: "admin" as const })),
+      verifyJwt: vi.fn(async () => ({ userId: "u1", userType: "admin" as const, v: 0 })),
       getAdminUserForAuth: vi.fn(async () => ({ success: false, reason: "disabled" }) as const),
     });
     expect(await resolveModelEndpointCaller(`Bearer ${jwtToken}`, disabled)).toBeNull();
+  });
+
+  it("令牌版本落后（改密 / 登出后已撤销的会话）返回 null", async () => {
+    const deps = createDeps({
+      // 载荷带着旧版本，账号侧已因改密 / 登出自增
+      verifyJwt: vi.fn(async () => ({ userId: "u1", userType: "admin" as const, v: 1 })),
+      getAdminUserForAuth: vi.fn(
+        async () => ({ success: true, id: "u1", tokenVersion: 2 }) as const,
+      ),
+    });
+
+    expect(await resolveModelEndpointCaller(`Bearer ${jwtToken}`, deps)).toBeNull();
   });
 });

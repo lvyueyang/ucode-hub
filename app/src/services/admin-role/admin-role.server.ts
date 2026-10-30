@@ -1,7 +1,8 @@
 /**
  * 管理端角色管理：CRUD 操作
  */
-import { and, eq, ilike, isNull, or } from "drizzle-orm";
+import { matchPermission } from "@ucode/hub-lib/match-permission";
+import { and, eq, isNull, like, or } from "drizzle-orm";
 import type { z } from "zod";
 import { db } from "#/db/index";
 import { adminRole } from "#/db/schema";
@@ -19,6 +20,21 @@ import type {
 
 export type AdminRoleRecord = typeof adminRole.$inferSelect;
 
+/**
+ * 角色权限不得越级写：非 root 只能往角色里写自己已持有的权限码。
+ * 不拦的话，「编辑角色」比改口令那条路更短：给自己的角色加上 `**` 即时提权。
+ */
+export function assertAdminPermissionWritable(
+  actor: { isRoot: boolean; rolePermissions: string[] },
+  permissions: string[],
+): void {
+  if (actor.isRoot || permissions.length === 0) return;
+  const beyond = permissions.filter((code) => !matchPermission(actor.rolePermissions, code));
+  if (beyond.length > 0) {
+    throw new Error(`不能写入超出自己权限范围的角色权限：${beyond.join(", ")}`);
+  }
+}
+
 /** 新建角色入参（schema 单一来源） */
 export type CreateAdminRoleInput = z.infer<typeof adminRoleCreateSchema>;
 
@@ -31,7 +47,7 @@ export type AdminRoleListParams = z.infer<typeof adminRoleListSchema>;
 /** 角色关键词搜索条件（名称 / 标识模糊匹配） */
 function keywordCondition(keyword?: string) {
   return keyword
-    ? or(ilike(adminRole.name, `%${keyword}%`), ilike(adminRole.slug, `%${keyword}%`))
+    ? or(like(adminRole.name, `%${keyword}%`), like(adminRole.slug, `%${keyword}%`))
     : undefined;
 }
 

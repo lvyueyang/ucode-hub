@@ -11,6 +11,7 @@ import {
   idSchema,
 } from "#/services/admin-role/admin-role.schemas";
 import {
+  assertAdminPermissionWritable,
   createAdminRole,
   deleteAdminRole,
   getAdminRoleList,
@@ -29,6 +30,10 @@ export const createAdminRoleSFn = createServerFn({ method: "POST" })
   .middleware([adminPermGuard(ADMIN_PERMISSIONS.ADMIN_ROLE_CREATE)])
   .validator(adminRoleCreateSchema)
   .handler(async ({ data, context }) => {
+    assertAdminPermissionWritable(
+      { isRoot: context.user.isRoot, rolePermissions: context.rolePermissions },
+      data.permissions ?? [],
+    );
     const result = await createAdminRole(data);
     logCrud(context.user, "admin-role", "create", {
       id: result.id,
@@ -42,6 +47,12 @@ export const updateAdminRoleSFn = createServerFn({ method: "POST" })
   .middleware([adminPermGuard(ADMIN_PERMISSIONS.ADMIN_ROLE_EDIT)])
   .validator(adminRoleUpdateSchema)
   .handler(async ({ data, context }) => {
+    if (data.permissions !== undefined) {
+      assertAdminPermissionWritable(
+        { isRoot: context.user.isRoot, rolePermissions: context.rolePermissions },
+        data.permissions,
+      );
+    }
     const result = await updateAdminRole(data.id, data);
     logCrud(context.user, "admin-role", "update", {
       id: data.id,

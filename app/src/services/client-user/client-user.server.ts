@@ -2,12 +2,15 @@
  * 客户端用户（client_user）管理：CRUD 操作
  */
 import bcrypt from "bcryptjs";
-import { and, eq, ilike, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, like, or } from "drizzle-orm";
 import type { z } from "zod";
 import { db } from "#/db/index";
 import { clientRole, clientUser } from "#/db/schema";
 import { verifyCaptcha } from "#/services/captcha/captcha.server";
-import { clearClientUserCache } from "#/services/client-auth/client-auth.server";
+import {
+  bumpClientTokenVersion,
+  clearClientUserCache,
+} from "#/services/client-auth/client-auth.server";
 import { logger } from "#/shared-services/logger";
 import {
   buildSortClause,
@@ -21,7 +24,10 @@ import type {
   clientUserUpdateSchema,
 } from "./client-user.schemas";
 
-export type ClientUserRecord = Omit<typeof clientUser.$inferSelect, "passwordHash" | "deletedAt">;
+export type ClientUserRecord = Omit<
+  typeof clientUser.$inferSelect,
+  "passwordHash" | "tokenVersion" | "deletedAt"
+>;
 
 /** 客户端用户列表项（含角色名称数组） */
 export interface ClientUserListItem extends ClientUserRecord {
@@ -79,7 +85,7 @@ export async function getClientUserList(params?: ClientUserListParams) {
   const whereCondition = and(
     notDeleted(clientUser.deletedAt),
     keyword
-      ? or(ilike(clientUser.username, `%${keyword}%`), ilike(clientUser.email, `%${keyword}%`))
+      ? or(like(clientUser.username, `%${keyword}%`), like(clientUser.email, `%${keyword}%`))
       : undefined,
   );
 
@@ -189,6 +195,7 @@ export async function deleteClientUser(id: string): Promise<boolean> {
   return true;
 }
 
+/** 客户端用户重置指定账号的密码：更新哈希后作废该账号已签发的全部令牌 */
 export async function resetClientPassword(id: string, newPassword: string): Promise<boolean> {
   const passwordHash = await bcrypt.hash(newPassword, 12);
   const [record] = await db
@@ -196,10 +203,12 @@ export async function resetClientPassword(id: string, newPassword: string): Prom
     .set({ passwordHash, updatedAt: new Date() })
     .where(and(eq(clientUser.id, id), notDeleted(clientUser.deletedAt)))
     .returning();
+  // 改密即自增令牌版本：作废该账号在其它浏览器 / 设备上的会话（替代单独清缓存）
+  if (record) await bumpClientTokenVersion(id);
   return !!record;
 }
 
-/** 客户端用户自助重置密码（忘记密码流程）：校验邮箱验证码后更新密码哈希并清缓存 */
+/** 客户端用户自助重置密码（忘记密码流程）：校验邮箱验证码后更新密码哈希并作废已签发令牌 */
 export async function resetClientPasswordByEmail(
   email: string,
   captcha: string,
@@ -212,12 +221,9 @@ export async function resetClientPasswordByEmail(
 
   const [user] = await db.select().from(clientUser).where(eq(clientUser.email, email)).limit(1);
 
-  if (!user || user.deletedAt) {
-    return { success: false, message: "该邮箱未注册" };
-  }
-
-  if (user.status !== "active") {
-    return { success: false, message: "该账号已被禁用" };
+  // 未注册、已删除、已停用一律同一句：否则这个未鉴权接口就是邮箱枚举的口子
+  if (!user || user.deletedAt || user.status !== "active") {
+    return { success: false, message: "该邮箱不可用于重置密码" };
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
@@ -228,10 +234,11 @@ export async function resetClientPasswordByEmail(
     .returning();
 
   if (!record) {
-    return { success: false, message: "该邮箱未注册" };
+    return { success: false, message: "该邮箱不可用于重置密码" };
   }
 
-  clearClientUserCache(user.id);
+  // 作废已签发令牌（内部同时清缓存）
+  await bumpClientTokenVersion(user.id);
 
   logger.info({ userId: user.id }, "客户端用户密码已重置");
   return { success: true, message: "密码重置成功" };

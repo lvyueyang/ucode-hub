@@ -11,6 +11,8 @@ export interface CachedAdminUser {
   avatar: string | null;
   isRoot: boolean;
   adminRoleIds: string[];
+  /** 令牌版本：与 JWT 载荷比对，不一致即表示旧令牌（已改密 / 被重置 / 已登出） */
+  tokenVersion: number;
   status: string;
 }
 

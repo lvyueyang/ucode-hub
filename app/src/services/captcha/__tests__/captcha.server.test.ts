@@ -25,7 +25,7 @@ const { mockCreateCaptcha } = vi.hoisted(() => ({
 }));
 vi.mock("../captcha", () => ({ create: mockCreateCaptcha }));
 
-const { mockDb, mockRows } = vi.hoisted(() => {
+const { mockDb, mockRows, mockUpdateSet } = vi.hoisted(() => {
   const rows = vi.fn().mockResolvedValue([]);
   const chain: any = {
     from: vi.fn(() => chain),
@@ -38,13 +38,16 @@ const { mockDb, mockRows } = vi.hoisted(() => {
   Object.defineProperty(chain, "then", {
     value: (onFulfilled: (value: unknown) => unknown) => rows().then(onFulfilled),
   });
+  // update 的 set 入参是「置 used / 累加 attempts / 两者同时」三种语义的落点，单独暴露供断言
+  const updateSet = vi.fn(() => ({ where: vi.fn() }));
   return {
     mockRows: rows,
+    mockUpdateSet: updateSet,
     mockDb: {
       select: vi.fn(() => chain),
       $count: vi.fn(),
       insert: vi.fn(() => ({ values: vi.fn(() => ({ returning: vi.fn() })) })),
-      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
+      update: vi.fn(() => ({ set: updateSet })),
       delete: vi.fn(() => ({ where: vi.fn() })),
     },
   };
@@ -71,6 +74,19 @@ describe("sendCaptcha", () => {
     expect(mockDb.insert).toHaveBeenCalled();
   });
 
+  it("发新码前先作废该 target 未用的旧码", async () => {
+    mockRows.mockResolvedValue([]);
+    mockSendCaptchaMail.mockResolvedValue(true);
+
+    await sendCaptcha("email", "user@test.com");
+
+    expect(mockUpdateSet).toHaveBeenCalledWith({ used: true });
+    // 作废必须早于写入新码，否则新码会被自己的作废语句命中
+    expect(mockUpdateSet.mock.invocationCallOrder[0]).toBeLessThan(
+      mockDb.insert.mock.invocationCallOrder[0],
+    );
+  });
+
   it("60 秒内重复发送被拦截", async () => {
     mockRows.mockResolvedValue([{ id: "recent" }]);
 
@@ -93,25 +109,44 @@ describe("verifyCaptcha", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("正确验证码返回 true 并标记已使用", async () => {
-    mockRows.mockResolvedValue([{ id: "cap-1" }]);
+    // 查询只按 type / target / 未用 / 未过期筛，码值在 JS 里比对
+    mockRows.mockResolvedValue([{ id: "cap-1", code: "123456", attempts: 0 }]);
 
     const result = await verifyCaptcha("email", "u@t.com", "123456");
+
     expect(result).toBe(true);
-    expect(mockDb.update).toHaveBeenCalled();
+    expect(mockUpdateSet).toHaveBeenCalledWith({ used: true });
   });
 
-  it("错误验证码返回 false", async () => {
-    mockRows.mockResolvedValue([]);
+  it("错误验证码返回 false 并累加失败次数（未达上限不作废）", async () => {
+    mockRows.mockResolvedValue([{ id: "cap-1", code: "123456", attempts: 0 }]);
 
-    const result = await verifyCaptcha("email", "u@t.com", "wrong");
+    const result = await verifyCaptcha("email", "u@t.com", "000000");
+
     expect(result).toBe(false);
+    expect(mockUpdateSet).toHaveBeenCalledWith({ attempts: 1 });
+    expect(mockUpdateSet).not.toHaveBeenCalledWith({ used: true });
   });
 
-  it("不存在的验证码返回 false", async () => {
+  it("错误满 5 次即作废该码，之后即使码对也校验失败", async () => {
+    // attempts 已到 4，再错一次就触顶
+    mockRows.mockResolvedValue([{ id: "cap-1", code: "123456", attempts: 4 }]);
+
+    expect(await verifyCaptcha("email", "u@t.com", "000000")).toBe(false);
+    expect(mockUpdateSet).toHaveBeenCalledWith({ attempts: 5, used: true });
+
+    // 该行 used 已为 true，查询条件（used = false）不再命中，正确码也拿不到记录
+    mockRows.mockResolvedValue([]);
+    expect(await verifyCaptcha("email", "u@t.com", "123456")).toBe(false);
+  });
+
+  it("没有未用且未过期的码时返回 false，且不写失败次数", async () => {
     mockRows.mockResolvedValue([]);
 
     const result = await verifyCaptcha("email", "u@t.com", "000000");
+
     expect(result).toBe(false);
+    expect(mockUpdateSet).not.toHaveBeenCalled();
   });
 });
 

@@ -12,6 +12,8 @@ import { CaptchaInput } from "#/components/client";
 import { useTranslation } from "#/components/providers";
 import { getCurrentClientSFn } from "#/services/client-auth/client-auth.functions";
 import { track } from "#/services/track/track";
+import { getVisibleConfigsSFn } from "#/shared-services/config/config.functions";
+import { toBool } from "#/utils/bool";
 import { getDisplayErrorMessage } from "#/utils/error-utils";
 import { sfnUnwrap } from "#/utils/sfn-error";
 import { clientRegisterSFn } from "./-mods/register.functions";
@@ -29,9 +31,13 @@ function RegisterError({ error }: { error: unknown }) {
 
 export const Route = createFileRoute("/register/")({
   beforeLoad: async () => {
-    const user = await getCurrentClientSFn();
+    const [user, config] = await Promise.all([getCurrentClientSFn(), getVisibleConfigsSFn()]);
     if (user) {
       throw redirect({ to: "/" });
+    }
+    // 自助注册关闭时不进入注册页（服务端 clientRegister 有同一道闸，这里只是不让入口可达）
+    if (!toBool(config.client_register_enabled)) {
+      throw redirect({ to: "/login" });
     }
   },
   component: ClientRegisterPage,

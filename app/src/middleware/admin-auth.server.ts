@@ -37,6 +37,11 @@ export async function resolveAdminAuthContext(
     throw new AdminAuthError("账号已被禁用或删除", 403);
   }
 
+  // 载荷版本与当前版本不一致：该会话已被撤销（改密 / 被重置 / 登出）
+  if (jwtPayload.v !== result.tokenVersion) {
+    throw new AdminAuthError("登录已失效，请重新登录", 401);
+  }
+
   return {
     user: {
       id: result.id,

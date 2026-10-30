@@ -18,6 +18,9 @@ vi.mock("#/shared-services/jwt", () => ({ jwt: { signToken: mockSignToken } }));
 const { mockVerifyCaptcha } = vi.hoisted(() => ({
   mockVerifyCaptcha: vi.fn(),
 }));
+const { mockGetConfig } = vi.hoisted(() => ({ mockGetConfig: vi.fn() }));
+// 注册流程第一步读配置项 client_register_enabled（自助注册默认关闭）
+vi.mock("#/shared-services/config/config.server", () => ({ getConfig: mockGetConfig }));
 vi.mock("#/services/captcha/captcha.server", () => ({
   verifyCaptcha: mockVerifyCaptcha,
 }));
@@ -114,7 +117,11 @@ describe("clientLogin", () => {
 });
 
 describe("clientRegister", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // 开关打开：走正常的校验验证码 → 查重 → 建用户路径
+    mockGetConfig.mockResolvedValue("true");
+  });
 
   it("注册成功", async () => {
     mockVerifyCaptcha.mockResolvedValue(true);
@@ -136,6 +143,18 @@ describe("clientRegister", () => {
     expect(mockLogOperation).toHaveBeenCalledWith(
       expect.objectContaining({ action: "register", module: "client-auth" }),
     );
+  });
+
+  it("注册开关关闭时直接失败，不校验验证码也不建用户", async () => {
+    mockGetConfig.mockResolvedValue("false");
+
+    const result = await clientRegister("u", "e@t.com", "pw", "123456");
+
+    expect(result).toEqual({ success: false, message: "注册已关闭" });
+    expect(mockVerifyCaptcha).not.toHaveBeenCalled();
+    expect(mockDb.select).not.toHaveBeenCalled();
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(bcrypt.hash).not.toHaveBeenCalled();
   });
 
   it("验证码错误返回失败", async () => {
@@ -178,6 +197,7 @@ describe("getClientUserForAuth", () => {
     avatar: null,
     clientRoleIds: ["role-1"],
     status: "active",
+    tokenVersion: 0,
   };
 
   beforeEach(() => {
@@ -195,7 +215,8 @@ describe("getClientUserForAuth", () => {
   });
 
   it("缓存命中时合并角色权限并去重", async () => {
-    clientUserCache.set("client-1", cachedUser);
+    // 缓存里的令牌版本即校验侧比对的值，透传出去才可能拦下被撤销的令牌
+    clientUserCache.set("client-1", { ...cachedUser, tokenVersion: 3 });
     mockRows.mockResolvedValue([
       { id: "role-1", permissions: ["news:view", "news:create"] },
       { id: "role-2", permissions: ["news:view", "dict:view"] },
@@ -206,6 +227,7 @@ describe("getClientUserForAuth", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.rolePermissions).toEqual(["news:view", "news:create", "dict:view"]);
+      expect(result.tokenVersion).toBe(3);
     }
   });
 

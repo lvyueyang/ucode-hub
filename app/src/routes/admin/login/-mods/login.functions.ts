@@ -23,7 +23,8 @@ export const adminLoginSFn = createServerFn({ method: "POST" })
         secure: isCookieSecure(),
         sameSite: "lax",
         path: "/",
-        maxAge: 7 * 24 * 3600,
+        // 与 JWT 24 小时有效期对齐；提前失效靠令牌版本自增（改密 / 被重置 / 登出）
+        maxAge: 24 * 3600,
       });
     }
     return result;

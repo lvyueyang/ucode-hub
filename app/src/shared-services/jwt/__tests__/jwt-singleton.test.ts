@@ -23,6 +23,7 @@ describe("jwt.signToken / jwt.verifyToken", () => {
       userId: "user-1",
       username: "test-admin",
       userType: "admin" as const,
+      v: 0,
     };
     const token = await jwt.signToken(payload);
     expect(typeof token).toBe("string");
@@ -40,6 +41,7 @@ describe("jwt.signToken / jwt.verifyToken", () => {
       userId: "user-2",
       username: "test-client",
       userType: "client" as const,
+      v: 0,
     };
     const token = await jwt.signToken(payload);
     const verified = await jwt.verifyToken(token);
@@ -61,6 +63,7 @@ describe("jwt.signToken / jwt.verifyToken", () => {
       userId: "user-1",
       username: "test",
       userType: "admin" as const,
+      v: 0,
     });
     const parts = token.split(".");
     parts[1] = "tamperedPayload";

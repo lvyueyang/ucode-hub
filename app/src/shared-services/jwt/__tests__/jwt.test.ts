@@ -1,6 +1,7 @@
 /**
  * JWT 模块测试：签发、校验、密钥缺失 fail-fast
  */
+import { SignJWT } from "jose";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../logger";
 import { createJwt } from "../index";
@@ -20,6 +21,8 @@ describe("createJwt", () => {
     userId: "u-1",
     username: "admin",
     userType: "admin",
+    // 令牌版本：与用户表的 token_version 比对，改密 / 登出后自增即作废旧令牌
+    v: 0,
   } as const;
 
   beforeEach(() => vi.clearAllMocks());
@@ -45,6 +48,19 @@ describe("createJwt", () => {
     const result = await jwt.verifyToken("invalid-token");
 
     expect(result).toBeNull();
+    expect(mockLogger.debug).toHaveBeenCalled();
+  });
+
+  it("载荷缺 v 时校验返回 null（令牌版本为必填）", async () => {
+    const jwt = createJwt({ secret, logger: mockLogger });
+    // 手工签发一份签名有效、但不带令牌版本的 token，模拟旧格式 / 伪造载荷
+    const token = await new SignJWT({ userId: "u-1", username: "admin", userType: "admin" })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime("24h")
+      .sign(new TextEncoder().encode(secret));
+
+    expect(await jwt.verifyToken(token)).toBeNull();
     expect(mockLogger.debug).toHaveBeenCalled();
   });
 

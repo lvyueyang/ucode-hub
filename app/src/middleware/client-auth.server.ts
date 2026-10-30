@@ -32,6 +32,11 @@ export async function resolveClientAuthContext(
     throw new ClientAuthError("账号已被禁用", 403);
   }
 
+  // 载荷版本与当前版本不一致：该会话已被撤销（改密 / 被重置 / 登出）
+  if (payload.v !== result.tokenVersion) {
+    throw new ClientAuthError("登录已失效，请重新登录", 401);
+  }
+
   return {
     userId: result.id,
     username: result.username,

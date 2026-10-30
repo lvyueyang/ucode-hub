@@ -91,6 +91,7 @@ describe("resolveAdminAuthContext", () => {
       userId: "client-1",
       username: "client",
       userType: "client",
+      v: 0,
     });
     await expect(resolveAdminAuthContext("client-token")).rejects.toMatchObject({
       statusCode: 403,
@@ -103,6 +104,7 @@ describe("resolveAdminAuthContext", () => {
       userId: "admin-1",
       username: "admin",
       userType: "admin",
+      v: 0,
     });
     mockGetAdminUserForAuth.mockResolvedValue({
       success: true,
@@ -110,6 +112,7 @@ describe("resolveAdminAuthContext", () => {
       username: "admin",
       email: "admin@test.com",
       isRoot: true,
+      tokenVersion: 0,
       rolePermissions: ["**"],
     });
 
@@ -120,11 +123,36 @@ describe("resolveAdminAuthContext", () => {
     });
   });
 
+  it("载荷令牌版本落后于当前版本时抛 401（会话已被撤销）", async () => {
+    mockVerifyToken.mockResolvedValue({
+      userId: "admin-1",
+      username: "admin",
+      userType: "admin",
+      v: 0,
+    });
+    // 改密 / 被重置 / 登出后库内版本已自增，旧令牌不得放行
+    mockGetAdminUserForAuth.mockResolvedValue({
+      success: true,
+      id: "admin-1",
+      username: "admin",
+      email: "admin@test.com",
+      isRoot: false,
+      tokenVersion: 1,
+      rolePermissions: [],
+    });
+
+    await expect(resolveAdminAuthContext("stale-token")).rejects.toMatchObject({
+      statusCode: 401,
+      message: "登录已失效，请重新登录",
+    });
+  });
+
   it("用户不存在时抛 401", async () => {
     mockVerifyToken.mockResolvedValue({
       userId: "ghost",
       username: "ghost",
       userType: "admin",
+      v: 0,
     });
     mockGetAdminUserForAuth.mockResolvedValue({
       success: false,
@@ -140,6 +168,7 @@ describe("resolveAdminAuthContext", () => {
       userId: "disabled-1",
       username: "disabled",
       userType: "admin",
+      v: 0,
     });
     mockGetAdminUserForAuth.mockResolvedValue({
       success: false,

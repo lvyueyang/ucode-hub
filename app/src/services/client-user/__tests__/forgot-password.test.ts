@@ -10,6 +10,7 @@ const {
   mockBcrypt,
   mockVerifyCaptcha,
   mockClearClientUserCache,
+  mockBumpClientTokenVersion,
   mockLogger,
 } = vi.hoisted(() => {
   const rows = vi.fn().mockResolvedValue([]);
@@ -39,6 +40,7 @@ const {
     mockBcrypt: { hash: vi.fn() },
     mockVerifyCaptcha: vi.fn(),
     mockClearClientUserCache: vi.fn(),
+    mockBumpClientTokenVersion: vi.fn(),
     mockLogger: {
       info: vi.fn(),
       debug: vi.fn(),
@@ -55,6 +57,7 @@ vi.mock("#/services/captcha/captcha.server", () => ({
 }));
 vi.mock("#/services/client-auth/client-auth.server", () => ({
   clearClientUserCache: mockClearClientUserCache,
+  bumpClientTokenVersion: mockBumpClientTokenVersion,
 }));
 vi.mock("#/shared-services/logger", () => ({ logger: mockLogger }));
 
@@ -76,17 +79,18 @@ describe("resetClientPasswordByEmail", () => {
     expect(mockDb.select).not.toHaveBeenCalled();
   });
 
-  it("用户不存在返回失败", async () => {
+  it("邮箱未注册时返回统一失败文案（不区分原因）", async () => {
     mockVerifyCaptcha.mockResolvedValue(true);
     mockRows.mockResolvedValue([]);
 
     const result = await resetClientPasswordByEmail("u@t.com", "123456", "newpass");
 
     expect(result.success).toBe(false);
-    expect(result.message).toBe("该邮箱未注册");
+    // 未注册 / 已删除 / 已停用同一句：未鉴权接口不留邮箱枚举口子
+    expect(result.message).toBe("该邮箱不可用于重置密码");
   });
 
-  it("用户已删除返回失败", async () => {
+  it("用户已删除时返回统一失败文案（不区分原因）", async () => {
     mockVerifyCaptcha.mockResolvedValue(true);
     mockRows.mockResolvedValue([
       {
@@ -100,10 +104,11 @@ describe("resetClientPasswordByEmail", () => {
     const result = await resetClientPasswordByEmail("u@t.com", "123456", "newpass");
 
     expect(result.success).toBe(false);
-    expect(result.message).toBe("该邮箱未注册");
+    // 未注册 / 已删除 / 已停用同一句：未鉴权接口不留邮箱枚举口子
+    expect(result.message).toBe("该邮箱不可用于重置密码");
   });
 
-  it("用户已禁用返回失败", async () => {
+  it("用户已停用时返回统一失败文案（不区分原因）", async () => {
     mockVerifyCaptcha.mockResolvedValue(true);
     mockRows.mockResolvedValue([
       {
@@ -116,7 +121,8 @@ describe("resetClientPasswordByEmail", () => {
     const result = await resetClientPasswordByEmail("u@t.com", "123456", "newpass");
 
     expect(result.success).toBe(false);
-    expect(result.message).toBe("该账号已被禁用");
+    // 已停用与未注册同一句，不暴露账号存在与否
+    expect(result.message).toBe("该邮箱不可用于重置密码");
   });
 
   it("正常重置密码成功", async () => {
@@ -153,7 +159,7 @@ describe("resetClientPasswordByEmail", () => {
     expect(mockBcrypt.hash).toHaveBeenCalledWith("newpass", 12);
   });
 
-  it("update 无记录（用户被删除）返回失败", async () => {
+  it("并发删除导致 update 无记录时返回统一失败文案（不区分原因）", async () => {
     mockVerifyCaptcha.mockResolvedValue(true);
     mockRows.mockResolvedValue([
       {
@@ -168,11 +174,12 @@ describe("resetClientPasswordByEmail", () => {
     const result = await resetClientPasswordByEmail("u@t.com", "123456", "newpass");
 
     expect(result.success).toBe(false);
-    expect(result.message).toBe("该邮箱未注册");
-    expect(mockClearClientUserCache).not.toHaveBeenCalled();
+    // 未注册 / 已删除 / 已停用同一句：未鉴权接口不留邮箱枚举口子
+    expect(result.message).toBe("该邮箱不可用于重置密码");
+    expect(mockBumpClientTokenVersion).not.toHaveBeenCalled();
   });
 
-  it("成功时清除用户缓存", async () => {
+  it("成功时自增令牌版本（作废该账号已签发的令牌）", async () => {
     mockVerifyCaptcha.mockResolvedValue(true);
     mockRows.mockResolvedValue([
       {
@@ -185,6 +192,6 @@ describe("resetClientPasswordByEmail", () => {
 
     await resetClientPasswordByEmail("u@t.com", "123456", "newpass");
 
-    expect(mockClearClientUserCache).toHaveBeenCalledWith("u-1");
+    expect(mockBumpClientTokenVersion).toHaveBeenCalledWith("u-1");
   });
 });

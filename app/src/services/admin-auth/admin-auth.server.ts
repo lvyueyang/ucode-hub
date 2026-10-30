@@ -3,11 +3,16 @@
  */
 
 import bcrypt from "bcryptjs";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "#/db/index";
 import { adminRole, adminUser } from "#/db/schema";
 import type { AdminLoginResult, AdminUser } from "#/services/admin-auth/admin-auth.types";
 import { adminUserCache, type CachedAdminUser } from "#/services/admin-auth/admin-user.cache";
+import {
+  clearLoginFailures,
+  loginLockRemainingMs,
+  recordLoginFailure,
+} from "#/services/login-throttle/login-throttle.server";
 import { type JwtPayload, jwt } from "#/shared-services/jwt";
 import { logger } from "#/shared-services/logger";
 
@@ -22,20 +27,38 @@ async function getAdminRolePermissions(adminRoleIds: string[]): Promise<string[]
 }
 
 /**
+ * 用户名不存在时也跑一次 bcrypt：否则「查库命中」与「未命中」的响应时间差就是用户名枚举的口子。
+ * 这个散列只用于计时，不对应任何真实口令。
+ */
+const TIMING_DUMMY_PASSWORD_HASH = "$2b$12$TADxti.gzlHmApX1T3XC3O9No2ik8oHPrSJuJ6kJmEl0OcXBUTi9K";
+
+/**
  * 管理员登录逻辑：验证用户名密码，签发 JWT
  * 调用方（路由 SF）负责设置 Cookie
  */
 export async function adminLogin(username: string, password: string): Promise<AdminLoginResult> {
+  // 失败次数按账号累计（进程内存），锁定期间直接快速失败
+  const throttleKey = `admin:${username}`;
+  if (loginLockRemainingMs(throttleKey) > 0) {
+    return { success: false, message: "尝试过于频繁，请稍后再试" };
+  }
+
   const [user] = await db.select().from(adminUser).where(eq(adminUser.username, username)).limit(1);
 
   if (!user || user.deletedAt || user.status !== "active") {
+    await bcrypt.compare(password, TIMING_DUMMY_PASSWORD_HASH);
+    recordLoginFailure(throttleKey);
     return { success: false, message: "用户名或密码错误" };
   }
 
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
+    const lockMs = recordLoginFailure(throttleKey);
+    if (lockMs > 0) logger.warn({ username, lockMs }, "管理员登录失败次数超阈值，已临时锁定");
     return { success: false, message: "用户名或密码错误" };
   }
+
+  clearLoginFailures(throttleKey);
 
   await db.update(adminUser).set({ lastLoginAt: new Date() }).where(eq(adminUser.id, user.id));
 
@@ -43,6 +66,7 @@ export async function adminLogin(username: string, password: string): Promise<Ad
     userId: user.id,
     username: user.username,
     userType: "admin",
+    v: user.tokenVersion,
   };
   const token = await jwt.signToken(payload);
 
@@ -70,6 +94,8 @@ export async function getCurrentAdmin(token: string | undefined): Promise<AdminU
     .where(and(eq(adminUser.id, jwtPayload.userId), isNull(adminUser.deletedAt)))
     .limit(1);
   if (!user || user.deletedAt || user.status !== "active") return null;
+  // 令牌版本不一致：该会话已被撤销（改密 / 被重置 / 登出）
+  if (user.tokenVersion !== jwtPayload.v) return null;
 
   let roleNames: string[] = [];
   let rolePermissions: string[] = ["**"];
@@ -107,6 +133,7 @@ export async function getAdminUserForAuth(userId: string): Promise<
       username: string;
       email: string;
       isRoot: boolean;
+      tokenVersion: number;
       rolePermissions: string[];
     }
   | { success: false; reason: "not_found" | "disabled" }
@@ -123,6 +150,7 @@ export async function getAdminUserForAuth(userId: string): Promise<
         username: cached.username,
         email: cached.email,
         isRoot: true,
+        tokenVersion: cached.tokenVersion,
         rolePermissions: ["**"],
       };
     }
@@ -133,6 +161,7 @@ export async function getAdminUserForAuth(userId: string): Promise<
       username: cached.username,
       email: cached.email,
       isRoot: false,
+      tokenVersion: cached.tokenVersion,
       rolePermissions: permissions,
     };
   }
@@ -151,6 +180,7 @@ export async function getAdminUserForAuth(userId: string): Promise<
     avatar: user.avatar,
     isRoot: user.isRoot,
     adminRoleIds: user.adminRoleIds,
+    tokenVersion: user.tokenVersion,
     status: user.status,
   };
   adminUserCache.set(userId, cacheEntry);
@@ -170,6 +200,7 @@ export async function getAdminUserForAuth(userId: string): Promise<
     username: user.username,
     email: user.email,
     isRoot: user.isRoot,
+    tokenVersion: user.tokenVersion,
     rolePermissions,
   };
 }
@@ -177,4 +208,16 @@ export async function getAdminUserForAuth(userId: string): Promise<
 /** 使管理员用户缓存失效（更新/删除/重置密码后调用） */
 export function clearAdminUserCache(userId: string): void {
   adminUserCache.delete(userId);
+}
+
+/**
+ * 自增令牌版本：使该账号已签发的全部令牌（含其他浏览器）立即失效。
+ * 改密、被管理员重置、登出都走这里——校验侧拿载荷里的 v 与当前值比对。
+ */
+export async function bumpAdminTokenVersion(userId: string): Promise<void> {
+  await db
+    .update(adminUser)
+    .set({ tokenVersion: sql`${adminUser.tokenVersion} + 1` })
+    .where(eq(adminUser.id, userId));
+  clearAdminUserCache(userId);
 }

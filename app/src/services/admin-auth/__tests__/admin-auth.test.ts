@@ -135,6 +135,7 @@ describe("getAdminUserForAuth", () => {
     isRoot: false,
     adminRoleIds: ["role-1"],
     status: "active",
+    tokenVersion: 0,
   };
 
   beforeEach(() => {
@@ -165,7 +166,8 @@ describe("getAdminUserForAuth", () => {
   });
 
   it("缓存命中且非 root 时合并角色权限并去重", async () => {
-    adminUserCache.set("admin-1", cachedUser);
+    // 缓存里的令牌版本即校验侧比对的值，透传出去才可能拦下被撤销的令牌
+    adminUserCache.set("admin-1", { ...cachedUser, tokenVersion: 3 });
     mockRows.mockResolvedValue([
       { id: "role-1", permissions: ["news:view", "news:create"] },
       { id: "role-2", permissions: ["news:view", "dict:view"] },
@@ -176,6 +178,7 @@ describe("getAdminUserForAuth", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.rolePermissions).toEqual(["news:view", "news:create", "dict:view"]);
+      expect(result.tokenVersion).toBe(3);
     }
   });
 

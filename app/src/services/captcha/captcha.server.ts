@@ -1,7 +1,7 @@
 /**
  * 验证码模块：生成、发送、校验验证码
  */
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import { and, desc, eq, gt } from "drizzle-orm";
 import { db } from "#/db/index";
 import { captchaCode } from "#/db/schema";
@@ -16,6 +16,8 @@ const CAPTCHA_EXPIRE_MINUTES = 5;
 const SEND_INTERVAL_SECONDS = 60;
 /** 图片验证码有效期（3 分钟） */
 const IMAGE_CAPTCHA_EXPIRE_MINUTES = 3;
+/** 单条验证码允许的失败次数：达到即作废，避免短码被反复尝试 */
+const MAX_VERIFY_ATTEMPTS = 5;
 
 /** 图片验证码生成配置 */
 const CAPTCHA_OPTIONS = {
@@ -30,9 +32,10 @@ const CAPTCHA_OPTIONS = {
 
 /**
  * 生成 6 位随机数字验证码
+ * 必须用 CSPRNG：Math.random 的状态可从少量输出反推，这种短凭证不能靠它
  */
 function generateCode(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(randomInt(0, 1_000_000)).padStart(6, "0");
 }
 
 export async function sendCaptcha(
@@ -55,6 +58,14 @@ export async function sendCaptcha(
   if (recentCode) {
     return { success: false, message: "发送过于频繁，请稍后再试" };
   }
+
+  // 发新码即作废旧码：否则同一 target 会并存多条有效码，命中概率按条数放大
+  await db
+    .update(captchaCode)
+    .set({ used: true })
+    .where(
+      and(eq(captchaCode.type, type), eq(captchaCode.target, target), eq(captchaCode.used, false)),
+    );
 
   // 生成验证码
   const code = generateCode();
@@ -102,7 +113,6 @@ export async function verifyCaptcha(
       and(
         eq(captchaCode.type, type),
         eq(captchaCode.target, target),
-        eq(captchaCode.code, code),
         eq(captchaCode.used, false),
         gt(captchaCode.expiredAt, new Date()),
       ),
@@ -111,6 +121,16 @@ export async function verifyCaptcha(
     .limit(1);
 
   if (!record) return false;
+
+  if (record.code !== code) {
+    const attempts = record.attempts + 1;
+    // 达到上限即作废该码：六位码 + 无限重试等于没有验证码
+    await db
+      .update(captchaCode)
+      .set(attempts >= MAX_VERIFY_ATTEMPTS ? { attempts, used: true } : { attempts })
+      .where(eq(captchaCode.id, record.id));
+    return false;
+  }
 
   // 标记为已使用
   await db.update(captchaCode).set({ used: true }).where(eq(captchaCode.id, record.id));

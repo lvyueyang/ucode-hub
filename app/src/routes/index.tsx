@@ -6,8 +6,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Button, Card, CardDescription, CardHeader, CardTitle } from "@ucode/hub-ui-ssr/ui";
 import { useClientAuth } from "#/components/client";
-import { useTranslation } from "#/components/providers";
+import { useGlobalStore, useTranslation } from "#/components/providers";
 import { getCurrentAdminSFn } from "#/services/admin-auth/admin-auth.functions";
+import { toBool } from "#/utils/bool";
 
 export const Route = createFileRoute("/")({
   component: HomePage,
@@ -34,6 +35,9 @@ function HomePage() {
   const { t } = useTranslation();
   const { user } = useClientAuth();
   const { isAdmin } = Route.useLoaderData();
+  const { systemConfig } = useGlobalStore();
+  // 注册入口跟随站点开关，与登录页、注册页读的是同一份客户端可见配置
+  const isRegisterEnabled = toBool(systemConfig.client_register_enabled);
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8 sm:py-16">
@@ -55,11 +59,13 @@ function HomePage() {
               <Link to="/login">
                 <Button className="w-full sm:w-auto">{t("登录")}</Button>
               </Link>
-              <Link to="/register">
-                <Button variant="outline" className="w-full sm:w-auto">
-                  {t("注册")}
-                </Button>
-              </Link>
+              {isRegisterEnabled && (
+                <Link to="/register">
+                  <Button variant="outline" className="w-full sm:w-auto">
+                    {t("注册")}
+                  </Button>
+                </Link>
+              )}
             </>
           )}
           {isAdmin && (

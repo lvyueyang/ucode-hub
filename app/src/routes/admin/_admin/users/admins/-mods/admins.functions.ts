@@ -13,6 +13,7 @@ import {
   resetPwdSchema,
 } from "#/services/admin-user/admin-user.schemas";
 import {
+  assertAdminRoleAssignmentAllowed,
   createAdminUser,
   deleteAdminUser,
   getAdminUser,
@@ -38,6 +39,11 @@ export const createSFn = createServerFn({ method: "POST" })
   .middleware([adminPermGuard(ADMIN_PERMISSIONS.ADMIN_CREATE)])
   .validator(adminUserCreateSchema)
   .handler(async ({ data, context }) => {
+    // 只能授出自己权限集覆盖得住的范围：否则一次「编辑管理员」就等于自己提权
+    await assertAdminRoleAssignmentAllowed(
+      { ...context.user, rolePermissions: context.rolePermissions },
+      data.adminRoleIds,
+    );
     const record = await createAdminUser(data);
     logCrud(
       context.user,
@@ -54,6 +60,12 @@ export const updateSFn = createServerFn({ method: "POST" })
   .middleware([adminPermGuard(ADMIN_PERMISSIONS.ADMIN_EDIT)])
   .validator(adminUserUpdateSchema)
   .handler(async ({ data, context }) => {
+    if (data.adminRoleIds !== undefined) {
+      await assertAdminRoleAssignmentAllowed(
+        { ...context.user, rolePermissions: context.rolePermissions },
+        data.adminRoleIds,
+      );
+    }
     const result = await updateAdminUser(data.id, data);
     logCrud(
       context.user,
@@ -87,6 +99,10 @@ export const resetPwdSFn = createServerFn({ method: "POST" })
   .middleware([adminPermGuard(ADMIN_PERMISSIONS.ADMIN_EDIT)])
   .validator(resetPwdSchema)
   .handler(async ({ data, context }) => {
+    // 重置口令只允许两种情形：root 重置任何人、非 root 只能重置自己（含「忘记密码」走邮箱那条）
+    if (!context.user.isRoot && context.user.id !== data.id) {
+      throw new Error("只有超级管理员可以重置其他管理员的口令");
+    }
     const existing = await getAdminUser(data.id);
     const result = await resetAdminPassword(data.id, data.password);
     logCrud(

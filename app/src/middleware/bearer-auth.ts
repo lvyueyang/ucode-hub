@@ -69,6 +69,8 @@ async function authenticateBearer(request: Request): Promise<BearerAuthContext> 
       ? await getAdminUserForAuth(payload.userId)
       : await getClientUserForAuth(payload.userId);
   if (!found.success) throw new BearerAuthError(UNAUTHORIZED_MESSAGE);
+  // 令牌版本不一致：该会话已被撤销（改密 / 被重置 / 登出），与 Cookie 鉴权同一口径
+  if (found.tokenVersion !== payload.v) throw new BearerAuthError(UNAUTHORIZED_MESSAGE);
 
   return {
     user: { type: payload.userType, id: found.id },

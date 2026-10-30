@@ -10,6 +10,7 @@ const {
   mockBcrypt,
   mockVerifyCaptcha,
   mockClearAdminUserCache,
+  mockBumpAdminTokenVersion,
   mockLogger,
   mockLogOperation,
 } = vi.hoisted(() => {
@@ -40,6 +41,7 @@ const {
     mockBcrypt: { hash: vi.fn() },
     mockVerifyCaptcha: vi.fn(),
     mockClearAdminUserCache: vi.fn(),
+    mockBumpAdminTokenVersion: vi.fn(),
     mockLogger: {
       info: vi.fn(),
       debug: vi.fn(),
@@ -57,6 +59,7 @@ vi.mock("#/services/captcha/captcha.server", () => ({
 }));
 vi.mock("#/services/admin-auth/admin-auth.server", () => ({
   clearAdminUserCache: mockClearAdminUserCache,
+  bumpAdminTokenVersion: mockBumpAdminTokenVersion,
 }));
 vi.mock("#/shared-services/logger", () => ({ logger: mockLogger }));
 vi.mock("#/shared-services/operation-log/operation-log.server", () => ({
@@ -81,17 +84,18 @@ describe("resetAdminPasswordByEmail", () => {
     expect(mockDb.select).not.toHaveBeenCalled();
   });
 
-  it("管理员不存在返回失败", async () => {
+  it("邮箱未注册时返回统一失败文案（不区分原因）", async () => {
     mockVerifyCaptcha.mockResolvedValue(true);
     mockRows.mockResolvedValue([]);
 
     const result = await resetAdminPasswordByEmail("admin@t.com", "123456", "newpass");
 
     expect(result.success).toBe(false);
-    expect(result.message).toBe("该邮箱未注册管理员账号");
+    // 未注册 / 已删除 / 已停用同一句：未鉴权接口不留邮箱枚举口子
+    expect(result.message).toBe("该邮箱不可用于重置密码");
   });
 
-  it("管理员已删除返回失败", async () => {
+  it("管理员已删除时返回统一失败文案（不区分原因）", async () => {
     mockVerifyCaptcha.mockResolvedValue(true);
     mockRows.mockResolvedValue([
       {
@@ -105,10 +109,11 @@ describe("resetAdminPasswordByEmail", () => {
     const result = await resetAdminPasswordByEmail("admin@t.com", "123456", "newpass");
 
     expect(result.success).toBe(false);
-    expect(result.message).toBe("该邮箱未注册管理员账号");
+    // 未注册 / 已删除 / 已停用同一句：未鉴权接口不留邮箱枚举口子
+    expect(result.message).toBe("该邮箱不可用于重置密码");
   });
 
-  it("管理员已禁用返回失败", async () => {
+  it("管理员已停用时返回统一失败文案（不区分原因）", async () => {
     mockVerifyCaptcha.mockResolvedValue(true);
     mockRows.mockResolvedValue([
       {
@@ -121,7 +126,28 @@ describe("resetAdminPasswordByEmail", () => {
     const result = await resetAdminPasswordByEmail("admin@t.com", "123456", "newpass");
 
     expect(result.success).toBe(false);
-    expect(result.message).toBe("该账号已被禁用，请联系超级管理员");
+    // 已停用与未注册同一句，不暴露账号存在与否
+    expect(result.message).toBe("该邮箱不可用于重置密码");
+  });
+
+  it("邮箱未确认时返回统一失败文案，且不写口令、不作废旧令牌", async () => {
+    mockVerifyCaptcha.mockResolvedValue(true);
+    mockRows.mockResolvedValue([
+      {
+        id: "a-1",
+        email: "admin@t.com",
+        status: "active",
+        // 未确认的邮箱不能用作恢复通道
+        emailVerified: false,
+      },
+    ]);
+
+    const result = await resetAdminPasswordByEmail("admin@t.com", "123456", "newpass");
+
+    expect(result.success).toBe(false);
+    expect(result.message).toBe("该邮箱不可用于重置密码");
+    expect(mockBcrypt.hash).not.toHaveBeenCalled();
+    expect(mockBumpAdminTokenVersion).not.toHaveBeenCalled();
   });
 
   it("正常重置密码成功", async () => {
@@ -131,6 +157,8 @@ describe("resetAdminPasswordByEmail", () => {
         id: "a-1",
         email: "admin@t.com",
         status: "active",
+        // 邮箱已确认才算可用的恢复通道
+        emailVerified: true,
       },
     ]);
     mockBcrypt.hash.mockResolvedValue("hashed_pwd");
@@ -157,6 +185,8 @@ describe("resetAdminPasswordByEmail", () => {
         id: "a-1",
         email: "admin@t.com",
         status: "active",
+        // 邮箱已确认才算可用的恢复通道
+        emailVerified: true,
       },
     ]);
     mockBcrypt.hash.mockResolvedValue("hashed_pwd");
@@ -166,13 +196,15 @@ describe("resetAdminPasswordByEmail", () => {
     expect(mockBcrypt.hash).toHaveBeenCalledWith("newpass", 12);
   });
 
-  it("update 无记录（用户被删除）返回失败", async () => {
+  it("并发删除导致 update 无记录时返回统一失败文案（不区分原因）", async () => {
     mockVerifyCaptcha.mockResolvedValue(true);
     mockRows.mockResolvedValue([
       {
         id: "a-1",
         email: "admin@t.com",
         status: "active",
+        // 邮箱已确认才算可用的恢复通道
+        emailVerified: true,
       },
     ]);
     mockBcrypt.hash.mockResolvedValue("hashed_pwd");
@@ -181,23 +213,28 @@ describe("resetAdminPasswordByEmail", () => {
     const result = await resetAdminPasswordByEmail("admin@t.com", "123456", "newpass");
 
     expect(result.success).toBe(false);
-    expect(result.message).toBe("该邮箱未注册管理员账号");
-    expect(mockClearAdminUserCache).not.toHaveBeenCalled();
+    // 未注册 / 已删除 / 已停用同一句：未鉴权接口不留邮箱枚举口子
+    expect(result.message).toBe("该邮箱不可用于重置密码");
+    // 走到写库才失败，而不是被前置校验挡下
+    expect(mockDb.update).toHaveBeenCalled();
+    expect(mockBumpAdminTokenVersion).not.toHaveBeenCalled();
   });
 
-  it("成功时清除管理员缓存", async () => {
+  it("成功时自增令牌版本（作废该账号已签发的令牌）", async () => {
     mockVerifyCaptcha.mockResolvedValue(true);
     mockRows.mockResolvedValue([
       {
         id: "a-1",
         email: "admin@t.com",
         status: "active",
+        // 邮箱已确认才算可用的恢复通道
+        emailVerified: true,
       },
     ]);
     mockBcrypt.hash.mockResolvedValue("hashed_pwd");
 
     await resetAdminPasswordByEmail("admin@t.com", "123456", "newpass");
 
-    expect(mockClearAdminUserCache).toHaveBeenCalledWith("a-1");
+    expect(mockBumpAdminTokenVersion).toHaveBeenCalledWith("a-1");
   });
 });
