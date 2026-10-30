@@ -12,7 +12,7 @@
 | 用户体系 | 入口路由 | Cookie 名 | 是否支持 RBAC | 注册方式 |
 |----------|----------|-----------|---------------|----------|
 | 管理端 (admin) | `/admin/login` | `hub_admin_token` | 是（admin_role 表） | 仅管理员手动创建 |
-| 客户端 (client) | `/login` | `hub_client_token` | 是（client_role 表） | 公开注册 + 邮箱验证码 |
+| 客户端 (client) | `/login` | `hub_client_token` | 是（client_role 表） | 自助注册受 `client_register_enabled` 开关控制（默认关闭）+ 邮箱验证码 |
 
 两套体系使用**独立的 Cookie**，允许同一浏览器同时登录管理员和前台用户。
 
@@ -54,11 +54,11 @@ flowchart TB
         end
     end
 
-    subgraph DB["PostgreSQL"]
+    subgraph DB["SQLite"]
         AdminTbl["admin_user"]
-        RoleTbl["admin_role<br/>(permissions: JSONB)"]
+        RoleTbl["admin_role<br/>(permissions: JSON 文本)"]
         ClientTbl["client_user"]
-        ClientRoleTbl["client_role<br/>(permissions: JSONB)"]
+        ClientRoleTbl["client_role<br/>(permissions: JSON 文本)"]
         CaptchaTbl["captcha_code"]
     end
 
@@ -83,79 +83,82 @@ flowchart TB
 ```mermaid
 erDiagram
     admin_role {
-        uuid id PK "defaultRandom()"
-        varchar name UK "角色名称"
-        varchar slug UK "角色标识"
-        jsonb permissions "权限码数组，如 ['dict:*','admin:view']"
+        text id PK "UUID，客户端生成"
+        text name UK "角色名称"
+        text slug UK "角色标识"
+        text permissions "权限码数组，如 ['dict:*','admin:view']"
         text description "角色描述"
-        timestamp created_at
-        timestamp updated_at
-        timestamp deleted_at "软删除"
+        integer created_at
+        integer updated_at
+        integer deleted_at "软删除"
     }
 
     admin_user {
-        uuid id PK "defaultRandom()"
-        varchar username UK "用户名"
-        varchar email UK "邮箱"
-        varchar password_hash "bcrypt 哈希"
-        varchar avatar "头像"
-        jsonb admin_role_ids "角色 id 数组（多角色，无外键）"
-        boolean is_root "是否超级管理员(仅一个)"
-        varchar status "active/disabled"
-        timestamp last_login_at
-        timestamp created_at
-        timestamp updated_at
-        timestamp deleted_at "软删除"
+        text id PK "UUID，客户端生成"
+        text username UK "用户名"
+        text email UK "邮箱"
+        integer email_verified "邮箱是否已确认（超管「忘记密码」的恢复通道）"
+        text password_hash "bcrypt 哈希"
+        integer token_version "令牌版本，改密 / 被重置 / 登出即自增"
+        text avatar "头像"
+        text admin_role_ids "角色 id 数组（多角色，无外键）"
+        integer is_root "是否超级管理员(仅一个)"
+        text status "active/disabled"
+        integer last_login_at
+        integer created_at
+        integer updated_at
+        integer deleted_at "软删除"
     }
 
     client_role {
-        uuid id PK "defaultRandom()"
-        varchar name UK "角色名称"
-        varchar slug UK "角色标识"
-        jsonb permissions "客户端权限码数组"
+        text id PK "UUID，客户端生成"
+        text name UK "角色名称"
+        text slug UK "角色标识"
+        text permissions "客户端权限码数组"
         text description "角色描述"
-        timestamp created_at
-        timestamp updated_at
-        timestamp deleted_at "软删除"
+        integer created_at
+        integer updated_at
+        integer deleted_at "软删除"
     }
 
     client_user {
-        uuid id PK "defaultRandom()"
-        varchar username UK "用户名"
-        varchar email UK "邮箱"
-        varchar password_hash "bcrypt 哈希"
-        varchar avatar "头像"
-        jsonb client_role_ids "角色 id 数组（多角色，无外键）"
-        varchar status "active/disabled"
-        boolean email_verified "邮箱是否验证"
-        timestamp last_login_at
-        timestamp created_at
-        timestamp updated_at
-        timestamp deleted_at "软删除"
+        text id PK "UUID，客户端生成"
+        text username UK "用户名"
+        text email UK "邮箱"
+        text password_hash "bcrypt 哈希"
+        integer token_version "令牌版本，改密 / 被重置 / 登出即自增"
+        text avatar "头像"
+        text client_role_ids "角色 id 数组（多角色，无外键）"
+        text status "active/disabled"
+        integer email_verified "邮箱是否验证"
+        integer last_login_at
+        integer created_at
+        integer updated_at
+        integer deleted_at "软删除"
     }
 
     captcha_code {
-        uuid id PK "defaultRandom()"
-        varchar type "email/sms/image"
-        varchar target "目标(邮箱/手机/图形token)"
-        varchar code "验证码值"
-        boolean used "是否已使用"
-        timestamp expired_at "过期时间"
-        timestamp created_at
+        text id PK "UUID，客户端生成"
+        text type "email/sms/image"
+        text target "目标(邮箱/手机/图形token)"
+        text code "验证码值"
+        integer used "是否已使用"
+        integer expired_at "过期时间"
+        integer created_at
     }
 
-    admin_role ||..o{ admin_user : "admin_role_ids (jsonb 数组)"
-    client_role ||..o{ client_user : "client_role_ids (jsonb 数组)"
+    admin_role ||..o{ admin_user : "admin_role_ids (JSON 文本数组)"
+    client_role ||..o{ client_user : "client_role_ids (JSON 文本数组)"
 ```
 
 ### 关键约束
 
 - `admin_user.is_root` 有**部分唯一索引**：`CREATE UNIQUE INDEX idx_admin_user_single_root ON admin_user (is_root) WHERE is_root = true`，从数据库层面保证全局仅一个 root 管理员。
-- 角色关联使用 `admin_role_ids` / `client_role_ids`（JSONB 字符串数组），支持**多角色**，多角色权限取并集（任一角色含某权限即拥有）；与角色表**无外键约束**。
+- 角色关联使用 `admin_role_ids` / `client_role_ids`（JSON 文本字符串数组，Drizzle `text({ mode: "json" })`），支持**多角色**，多角色权限取并集（任一角色含某权限即拥有）；与角色表**无外键约束**。
 
 ### `admin_role.permissions` 字段
 
-权限以 `jsonb` 格式存储，值为字符串数组：
+权限以 JSON 文本存储（列类型是 `text`，值为字符串数组）：
 
 ```json
 ["dict:*", "admin:view", "admin:create", "file:*", "dashboard:view"]
@@ -170,10 +173,10 @@ erDiagram
 
 | 特性 | admin_user | client_user |
 |------|------------|-------------|
-| 角色关联 | `admin_role_ids`（JSONB 多角色） | `client_role_ids`（JSONB 多角色） |
+| 角色关联 | `admin_role_ids`（JSON 文本多角色） | `client_role_ids`（JSON 文本多角色） |
 | is_root | 有（部分唯一索引） | 无 |
-| 邮箱验证 | 无 | `email_verified` 字段 |
-| 注册入口 | 管理员手动创建 | 公开 `/register` |
+| 邮箱验证 | 有（`email_verified`，未确认的邮箱不能用作恢复通道） | 有（`email_verified` 字段） |
+| 注册入口 | 管理员手动创建 | 自助注册（`client_register_enabled` 开关，默认关闭） |
 | 认证缓存 | `adminUserCache`（5 分钟 TTL） | `clientUserCache`（5 分钟 TTL） |
 | 中间件保护 | `adminAuthGuard` / `adminPermGuard` / `adminPermRouteGuard` | `clientAuthGuard` / `clientPermGuard` / `clientPermRouteGuard` |
 
@@ -188,16 +191,18 @@ sequenceDiagram
     participant Browser as 浏览器
     participant LoginSF as adminLoginSFn<br/>(Server Function)
     participant Server as adminLogin()<br/>(.server.ts)
-    participant DB as PostgreSQL
+    participant DB as SQLite
     participant JWT as signToken()
 
     Browser->>LoginSF: POST { username, password }
     LoginSF->>Server: adminLogin(username, password)
 
+    Server->>Server: 锁定期间直接失败（按账号累计失败次数）
     Server->>DB: SELECT * FROM admin_user WHERE username = ?
     DB-->>Server: user row
 
     alt 用户不存在 / 已删除 / 状态非 active
+        Server->>Server: 仍跑一次 bcrypt（消时间侧信道）
         Server-->>LoginSF: { success: false, message: "用户名或密码错误" }
         LoginSF-->>Browser: 错误信息
     else 用户校验通过
@@ -206,14 +211,17 @@ sequenceDiagram
             Server-->>LoginSF: { success: false, message: "用户名或密码错误" }
         else 密码正确
             Server->>DB: UPDATE admin_user SET last_login_at = now()
-            Server->>JWT: signToken({ userId, username, userType: "admin" })
-            JWT-->>Server: JWT Token (HS256, 7 天有效)
+            Server->>JWT: signToken({ userId, username, userType: "admin", v })
+            JWT-->>Server: JWT Token (HS256, 24 小时有效)
             Server-->>LoginSF: { success: true, user, token }
             LoginSF->>Browser: setCookie("hub_admin_token", token, httpOnly)
             Browser->>Browser: 跳转 /admin
         end
     end
 ```
+
+- **失败节流**（`src/services/login-throttle/login-throttle.server.ts`）：失败次数按账号累计在进程内存，5 次锁 30 秒 / 10 次锁 5 分钟 / 20 次锁 1 小时，成功一次即清零；锁定期间不做密码比对，直接回「尝试过于频繁，请稍后再试」。
+- **计时一致**：用户名不存在（或已删 / 已停用）时也会跑一次固定散列的 bcrypt 再回同一句文案，否则响应时间差就是用户名枚举的口子。
 
 ### 客户端注册与登录流程
 
@@ -223,7 +231,7 @@ sequenceDiagram
     participant RegisterSF as clientRegisterSFn
     participant LoginSF as clientLoginSFn
     participant Server as clientAuth.server.ts
-    participant DB as PostgreSQL
+    participant DB as SQLite
     participant Captcha as captcha.server.ts
     participant JWT as signToken()
 
@@ -231,6 +239,8 @@ sequenceDiagram
 
     Browser->>RegisterSF: POST { username, email, password, captcha }
     RegisterSF->>Server: clientRegister()
+
+    Note over RegisterSF,Server: 自助注册受 client_register_enabled 开关控制（默认关闭），关闭时直接回「注册已关闭」
 
     Server->>Captcha: verifyCaptcha("email", email, captcha)
     alt 验证码无效或过期
@@ -254,7 +264,7 @@ sequenceDiagram
     LoginSF->>Server: clientLogin()
     Server->>DB: SELECT * FROM client_user WHERE username = ?
     Server->>Server: bcrypt.compare(password, passwordHash)
-    Server->>JWT: signToken({ userId, username, userType: "client" })
+    Server->>JWT: signToken({ userId, username, userType: "client", v })
     Server-->>LoginSF: { success: true, user, token }
     LoginSF->>Browser: setCookie("hub_client_token", token, httpOnly)
 ```
@@ -267,10 +277,17 @@ sequenceDiagram
 |------|------|
 | 算法 | HS256（`jose` 库，`#/shared-services/jwt`） |
 | 密钥 | `process.env.JWT_SECRET`（app 惰性单例壳缓存为 `Uint8Array`） |
-| 有效期 | 7 天 |
-| 载荷 | `{ userId: string; username: string; userType: "admin" \| "client" }` |
+| 有效期 | 24 小时（Cookie 的 `maxAge` 同步 24 小时；提前失效靠令牌版本） |
+| 载荷 | `{ userId: string; username: string; userType: "admin" \| "client"; v: number }` |
 
 `userType` 字段用于区分管理端和客户端 token，防止跨体系 token 滥用。`verifyToken` 失败时返回 `null`（不抛异常）。
+
+**撤销（令牌版本）**：载荷里的 `v` 是非负整数，鉴权时与用户表的 `token_version` 比对，不一致即当未登录处理。`token_version` 在**改密 / 被重置 / 登出**时自增（`admin_user` / `client_user` 各一列），因此：
+
+- 登出不再只清当前这份 Cookie，**同一账号在其它浏览器 / 设备上的会话一并作废**；
+- 改密或被管理员重置后，已签发的令牌立即失效，不必等 24 小时自然过期。
+
+比对发生在两条凭证路径上：Cookie 会话（`src/middleware/admin-auth.server.ts` / `client-auth.server.ts`）与外部客户端的 Bearer 令牌（`src/middleware/bearer-auth.ts`）。
 
 ---
 
@@ -314,6 +331,14 @@ sequenceDiagram
 - `hasAdminPermission(rolePermissions, AdminPermissionDef)` — 单个权限校验
 - `hasAnyAdminPermission(rolePermissions, AdminPermissionDef[])` — 任意满足（OR）
 - `hasAllAdminPermissions(rolePermissions, AdminPermissionDef[])` — 全部满足（AND）
+
+### 授予边界（防提权）
+
+「编辑角色」与「编辑管理员」本身就是权限码：不限制写入内容的话，控制它们就等于自己给自己提权（给自己的角色加上 `**`，或直接给自己分配超级管理员角色）。因此三条写入路径都按操作者自己的权限集收口，均在服务层强制：
+
+- **角色权限写入**：非 root 只能往角色里写自己已持有的权限码（`assertAdminPermissionWritable`，`src/services/admin-role/admin-role.server.ts`）
+- **角色分配**：非 root 只能授出「自己权限集覆盖得住」的角色（`assertAdminRoleAssignmentAllowed`，`src/services/admin-user/admin-user.server.ts`）；`**` 也当作一个权限码参与判定，所以含超级管理员权限的角色只有 root 能授出
+- **口令重置**：root 可重置任何人，非 root 只能重置自己（含走邮箱的「忘记密码」）
 
 ---
 
@@ -448,7 +473,7 @@ sequenceDiagram
     participant Browser as 浏览器
     participant InitPage as /admin/init
     participant InitServer as init.server.ts
-    participant DB as PostgreSQL
+    participant DB as SQLite
 
     Browser->>InitPage: 首次访问系统
     InitPage->>InitServer: checkInitStatus()
@@ -490,6 +515,7 @@ sequenceDiagram
 `getCurrentClient()` / `getClientUserForAuth()` 使用 5 分钟 TTL 的内存缓存（`clientUserCache`）减少重复数据库查询。缓存失效场景：
 - 管理员修改客户端用户状态或角色时，`src/services/client-user/client-user.server.ts` 主动调用 `clientUserCache.delete(userId)`
 - 管理员删除客户端用户时，同样清除缓存
+- 改密 / 被重置 / 登出时，`bumpClientTokenVersion()` 自增令牌版本并清缓存（缓存里带 `tokenVersion`，读取时与令牌载荷的 `v` 比对）
 
 ### 管理员端认证状态
 
@@ -517,15 +543,19 @@ const csrfMiddleware = createCsrfMiddleware({
 
 | 层面 | 措施 |
 |------|------|
-| 密码存储 | bcrypt 哈希（管理端 CRUD 创建/重置用 cost=12，客户端注册用 cost=10，管理员/客户端自助验证码重置 cost=12） |
-| Token | HS256 JWT，7 天有效期，httpOnly Cookie |
+| 密码存储 | bcrypt 哈希，**cost 统一 12**（管理端 CRUD、客户端注册、管理员 / 客户端自助验证码重置各写入点一致） |
+| 口令重置 | 「忘记密码」未注册 / 已删除 / 已停用统一回「该邮箱不可用于重置密码」，不给邮箱枚举留口子；管理端还要求邮箱已确认（`email_verified`，初始化写入的超管邮箱视为已确认），未确认的邮箱不能用作恢复通道 |
+| Token | HS256 JWT，24 小时有效期，httpOnly Cookie；撤销靠载荷 `v` 与用户表 `token_version` 比对（改密 / 被重置 / 登出即自增） |
+| 登录节流 | 失败按账号累计（进程内存）：5 次锁 30 秒 / 10 次 5 分钟 / 20 次 1 小时，成功清零；用户名不存在也跑一次 bcrypt |
+| 邮箱验证码 | `crypto.randomInt` 生成 6 位数字，5 分钟有效；同一条码错 5 次即作废，发新码作废旧码 |
 | Cookie | 管理端/客户端独立 Cookie，避免相互覆盖 |
 | CSRF | TanStack Start 内置 CSRF 中间件，仅 ServerFn 生效 |
-| 权限 | RBAC + 三级权限匹配，root 自动绕过角色表 |
+| 权限 | RBAC + 三级权限匹配，root 自动绕过角色表；角色分配与角色权限写入不得越级（`**` 只有 root 能授） |
+| 注册开关 | 客户端自助注册由 `client_register_enabled` 控制，**默认关闭** |
 | 软删除 | 所有用户/角色表使用 `deleted_at`，查询始终过滤 |
 | 防并发初始化 | 数据库事务内二次校验 is_root |
 | 构建安全 | Vite 配置禁止 `bcryptjs` / `drizzle-orm` 进入客户端 bundle |
-| Root 保护 | 数据库唯一索引 + 禁用/删除拦截 |
+| Root 保护 | 数据库唯一索引 + 禁用/删除拦截；口令重置只允许 root 改他人、非 root 改自己 |
 
 ---
 
@@ -533,7 +563,9 @@ const csrfMiddleware = createCsrfMiddleware({
 
 | 文件 | 职责 |
 |------|------|
-| `src/shared-services/jwt` | JWT 签发/校验与应用级单例壳（惰性） |
+| `src/shared-services/jwt` | JWT 签发/校验与应用级单例壳（惰性；有效期与令牌版本载荷都在这里） |
+| `src/services/login-throttle/login-throttle.server.ts` | 登录失败节流（按账号累计，进程内存） |
+| `src/middleware/bearer-auth.ts` | 外部客户端的 Bearer 令牌鉴权（含令牌版本比对） |
 | `src/constants/cookie-names.ts` | Cookie 名称常量（`COOKIE_NAMES`，当前 `hub_admin_token` / `hub_client_token`，交付时按实际域名改这一处） |
 | `src/permissions/admin-permissions.ts` | 管理端权限码常量（`ADMIN_PERMISSIONS` / `ADMIN_PERMISSIONS_BY_GROUP` / `hasAdminPermission` 等） |
 | `packages/lib/src/match-permission/index.ts` | 权限匹配纯函数（`matchPermission`，`@ucode/hub-lib/match-permission`） |
@@ -550,7 +582,7 @@ const csrfMiddleware = createCsrfMiddleware({
 | `src/services/client-role/client-role.server.ts` | 客户端角色 CRUD |
 | `src/db/schema/admin-user.ts` | admin_user 表（含部分唯一索引） |
 | `src/db/schema/client-user.ts` | client_user 表 |
-| `src/db/schema/admin-role.ts` | admin_role 表（permissions JSONB） |
+| `src/db/schema/admin-role.ts` | admin_role 表（permissions JSON 文本） |
 | `src/db/schema/client-role.ts` | client_role 表 |
 | `src/routes/admin/_admin.tsx` | 管理端布局：beforeLoad 鉴权 |
 | `src/routes/admin/login/index.tsx` | 管理端登录页 |

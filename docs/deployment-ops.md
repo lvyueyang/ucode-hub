@@ -7,7 +7,7 @@
 
 ## 生产环境部署
 
-生产部署内容内联在本仓 `deploy/`（**仓内普通目录，不是 git 子模块**）：生产 compose（内置 PostgreSQL）、一键部署/更新、备份/恢复、迁移预检脚本与运维手册；部署目录 `/opt/hub/`，容器名 `hub-app` / `hub-db`。
+生产部署内容内联在本仓 `deploy/`（**仓内普通目录，不是 git 子模块**）：生产 compose（SQLite 单文件库，无独立数据库容器，故只有 `hub-app` 一个容器）、一键部署/更新、备份/恢复（库文件用容器内 `VACUUM INTO` 做在线快照）、迁移预检脚本与运维手册；部署目录 `/opt/hub/`，应用数据与库文件同卷（`volumes/app`）。
 
 - **部署运维手册**（首次部署 / 升级流程 / 回滚 / 定期备份 cron）→ [`deploy/README.md`](../deploy/README.md)
 - 仓内 compose 分两份：`docker-compose.yml` 是开发用（`build:` 从源码构建），`deploy/docker-compose.yml` 是生产用（取已推送的镜像）
@@ -139,6 +139,8 @@ map $http_upgrade $connection_upgrade { default upgrade; '' close; }
 
 服务端已对回灌响应下发 `X-Accel-Buffering: no`（事件流逐帧），反代侧仍必须关掉自身的缓冲。
 
+上面只列回灌的硬要求。完整的生产样例（`limit_req` 四档限速与 `limit_req_status 429`、HSTS / `X-Frame-Options` / `X-Content-Type-Options` / `Referrer-Policy`、TLS 1.2+ 与限定套件、以及控制面来源收敛建议）见 [`deploy/nginx.conf.example`](../deploy/nginx.conf.example)；那层还要注意 `/health` 与 `/api/metrics` 本身不鉴权，对外暴露时必须一并收窄。
+
 ### 已知限制
 
 - 一台设备只保留一条隧道连接（新连接接管旧的）：多实例客户端会互相顶掉。
@@ -162,7 +164,7 @@ map $http_upgrade $connection_upgrade { default upgrade; '' close; }
 |------|------|
 | `app/.env` | 运行环境变量（不入库） |
 | `app/.env.example` | 环境变量模板（变量清单与说明的事实源） |
-| `deploy/.env.example` | 生产部署变量模板（POSTGRES_* 等，compose 用它拼出应用的 DATABASE_URL） |
+| `deploy/.env.example` | 生产部署变量模板（`DATABASE_URL` / `JWT_SECRET` / `APP_PORT` / `TAG` 与可选变量，compose 直接注入应用） |
 
 **读取与校验统一在 `app/src/env.ts`**（app 内唯一的 `process.env` 读取点，兼作启动期校验），业务代码不得再直读。
 
@@ -170,7 +172,7 @@ map $http_upgrade $connection_upgrade { default upgrade; '' close; }
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `DATABASE_URL` | PostgreSQL 连接字符串 | —（必填） |
+| `DATABASE_URL` | SQLite 库文件路径（相对路径按进程 cwd 解析；`:memory:` 为内存库；可带可不带 `file:` 前缀） | —（必填） |
 | `JWT_SECRET` | HS256 签名密钥（至少 32 字符） | —（必填） |
 | `STORAGE_DIR` | 数据存储目录（上传文件 + 日志 + 监控采样） | —（必填） |
 | `LOG_LEVEL` | 日志级别 | `info` |
@@ -179,13 +181,10 @@ map $http_upgrade $connection_upgrade { default upgrade; '' close; }
 | `COOKIE_SECURE` | 认证 Cookie 是否启用 Secure 标志（`true`/`false`），未设置时按 NODE_ENV 推断 | 生产为 `true` |
 | `CONFIG_ENCRYPTION_KEY` | 系统配置敏感值加密主密钥（32 字节 Base64 或 64 位十六进制）；启用敏感配置后必填，缺失时读取敏感配置报错 | —（可选） |
 | `HUB_BASE_DOMAIN` | ingress 回灌的父域（如 `relay.example.com`）：设了才启用 `<设备 id>.<父域>` 的子域回灌 | —（不设则只跑控制面） |
-| `DB_POOL_MAX` | pg 连接池最大连接数 | `10` |
-| `DB_POOL_IDLE_TIMEOUT_MS` | 连接空闲回收时间（毫秒） | `30000` |
-| `DB_POOL_CONNECTION_TIMEOUT_MS` | 连接获取超时（毫秒） | `2000` |
 
 > 必需项缺失或任一项取值非法（如 `LOG_LEVEL` 不在白名单、`JWT_SECRET` 不足 32 字符）一律拒绝启动，一次报出全部问题；判定规则与默认值都集中在 `app/src/env.ts`。
 
-> 连接池参数由 `src/db/index.ts` 从 `src/env.ts` 取值建 `pg.Pool`，postgres 驱动默认值见 [node-postgres 文档](https://node-postgres.com/features/pool)。
+> **库文件**：单文件库由 `src/db/index.ts` 建（WAL 模式，库文件权限收紧为 `0600`，`-wal` / `-shm` 与主库同目录）。生产里 `DATABASE_URL` 必须落在容器挂载卷内（compose 默认 `./data/data.db`，即宿主 `volumes/app/data.db`）：换路径等于换库，落到卷外则随容器重建丢失。备份与恢复按整文件处理（见 [`deploy/README.md`](../deploy/README.md)）。
 
 SMTP 邮件配置存储于系统配置表，通过 `/admin/config` 页面管理。
 
@@ -276,7 +275,7 @@ logger.error/warn/info/debug
 - **采样落盘**：`src/services/system-metric` 每分钟采集进程 CPU / 内存 / 事件循环延迟 / 活跃资源 / 请求增量 / 依赖健康 / 数据库总量，写入 `{STORAGE_DIR}/metrics/YYYY-MM-DD.ndjson`（NDJSON，按业务时区按天切割），保留 7 天并由每日定时任务清理
 - **实时快照**：现读进程指标（微秒级、零 IO、零数据库探测），前端每 5 秒轮询；依赖健康取最近一次采样，避免轮询打数据库
 - **历史趋势**：切换范围（1h / 24h / 7d）时按时间桶聚合采样文件，流式读取、内存 `O(桶数)`
-- **存储 / 数据库占用**：STORAGE_DIR 体积（含顶层目录分解与文件系统容量）与数据库各表占用（`pg_relation_size` 等）按需查询 + 内存缓存，页面「刷新」强制重算
+- **存储 / 数据库占用**：STORAGE_DIR 体积（含顶层目录分解与文件系统容量）与数据库各表占用（SQLite 的 `dbstat` 虚拟表，总量取 `PRAGMA page_count` × `page_size`，见 `src/services/system-metric/system-metric.db-size.server.ts`）按需查询 + 内存缓存，页面「刷新」强制重算
 - 常驻开销：每分钟一次毫秒级采样 + 一行追加写，约 350 B/分钟；无建表、无迁移
 
 > 该功能与 Prometheus 指标并存：应用内监控面向管理端可视化，Prometheus 面向外部监控系统与告警。
@@ -434,7 +433,7 @@ GET /health → 200
 
 | 文件 | 职责 |
 |------|------|
-| `deploy/`（仓内目录，非子模块） | 生产部署运维内容（compose / 脚本 / 手册） |
+| `deploy/`（仓内目录，非子模块） | 生产部署运维内容（compose、`backup.sh` / `restore.sh` 库文件备份恢复、`preflight-migrations.sh` 迁移预检、`nginx.conf.example` 反代样例） |
 | `server.ts`（app 根目录） | Nitro 服务入口 + HTTP 指标埋点 |
 | `server/routes/api/v1/tunnel.ts` | 隧道宿主（WS 端点：握手、心跳、上线登记、收尾） |
 | `server/middleware/ingress.ts` | ingress：按 Host 认设备的子域回灌（鉴权 / 剥头 / 流式转发） |
